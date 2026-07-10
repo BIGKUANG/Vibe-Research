@@ -103,7 +103,7 @@ Vibe-Research/
 │   ├── gstock.py        美股 / 港股数据（移植自 global-stock-data）
 │   ├── newsradar.py     资讯雷达（移植自 investment-news）
 │   ├── market.py        市场情绪 + 板块资金流 + 全球指数
-│   ├── portfolio.py     持仓 + 已清仓（本地缓存）
+│   ├── portfolio.py     持仓 + 已清仓（存本地用户目录）
 │   ├── chat.py          系统 AI（OpenAI 兼容 function-calling）
 │   └── mcp_server.py    MCP server（给 Claude Code 等 agent）
 └── frontend/          Vite + React 19 + TS + Tailwind（玻璃暖橙主题）:5899
@@ -160,6 +160,7 @@ cd backend && .venv/bin/pip install -r requirements-dev.txt
 - 连板股 / 成交额榜等均为**客观公开榜单数据**（东财 / 同花顺同款），产品只如实呈现、不附带任何推荐或预测。
 - 所有分析方向由你自己配置的 AI 给出，与本产品无关。UI 无买卖按钮；估值历史分位只标位置、不划买卖线。
 - **持仓 / 关注股 / 上传的研报 / API key 只存本地，不上传、不进仓库。**
+- 持仓与上传的研报默认存在**用户目录 `~/.vibe-research/`**（可用环境变量 `VR_DATA_DIR` 换根目录、`VR_REPORTS_DIR` 单独指定研报目录）——在项目文件夹之外，**重新下载 / 覆盖更新项目文件夹不会丢数据**；旧版本存在 `backend/.cache/` 的数据，新版首次启动自动迁移（复制，原文件保留）。
 
 ## 🏛 相关生态
 
