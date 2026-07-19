@@ -10,6 +10,9 @@ export class ApiError extends Error {
 // 后端访问密钥（对应后端部署时的 VR_API_KEY，公网部署防蹭用）。只存本地浏览器。
 const ACCESS_KEY = "vr-access-key";
 
+// 登录 token（由 /api/auth/login 返回，用于页面登录认证）
+const AUTH_TOKEN_KEY = "vr-auth-token";
+
 export function loadAccessKey(): string {
   try {
     return localStorage.getItem(ACCESS_KEY) || "";
@@ -29,6 +32,11 @@ export function saveAccessKey(key: string) {
 
 export function authHeaders(): Record<string, string> {
   const k = loadAccessKey();
+  // 登录 token（如果有）优先于 API Key
+  try {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || "";
+    if (token) return { Authorization: `Bearer ${token}` };
+  } catch { /* ignore */ }
   return k ? { Authorization: `Bearer ${k}` } : {};
 }
 
@@ -235,6 +243,8 @@ export interface GlobalStock {
 
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
+  login: (username: string, password: string) =>
+    request<{ token: string; expires_in: number }>("/auth/login", "POST", { username, password }),
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),

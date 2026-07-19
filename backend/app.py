@@ -9,8 +9,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
+import secrets
+import time as _time
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,17 +50,56 @@ app.add_middleware(
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
 _API_KEY = os.environ.get("VR_API_KEY", "").strip()
 
+# 登录认证（前端登录页面使用）：用户/密码 来自 .env
+_AUTH_USER = os.environ.get("VR_AUTH_USER", "").strip()
+_AUTH_PASS = os.environ.get("VR_AUTH_PASS", "").strip()
+# 服务器签名密钥（每次重启刷新，重启后旧 token 失效）
+_AUTH_SECRET = secrets.token_hex(16)
+# 放行登录和健康检查
+_AUTH_SKIP = {"/api/auth/login", "/api/health"}
+
+
+class LoginReq(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/login")
+def login(req: LoginReq):
+    """登录验证：校验 user/pass，返回 HMAC 签名 token。"""
+    if not _AUTH_USER:
+        return JSONResponse({"detail": "未配置登录账户（VR_AUTH_USER）"}, status_code=503)
+    if req.username != _AUTH_USER or req.password != _AUTH_PASS:
+        return JSONResponse({"detail": "用户名或密码错误"}, status_code=401)
+    payload = json.dumps({"u": req.username, "t": _time.time()}, separators=(",", ":"))
+    sig = hmac.new(_AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    token = base64.b64encode(f"{payload}:{sig}".encode()).decode()
+    return {"token": token, "expires_in": 86400}
+
+
+def _verify_token(token: str) -> bool:
+    """验证 HMAC token 是否合法。"""
+    try:
+        raw = base64.b64decode(token).decode()
+        payload, sig = raw.rsplit(":", 1)
+        expected = hmac.new(_AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
 
 @app.middleware("http")
-async def _require_api_key(request: Request, call_next):
+async def _require_auth(request: Request, call_next):
+    # 当 VR_AUTH_PASS 有值时，所有非放行的 API 请求需要有效 token
     if (
-        _API_KEY
+        _AUTH_PASS
         and request.method != "OPTIONS"
         and request.url.path.startswith("/api/")
-        and request.url.path != "/api/health"
+        and request.url.path not in _AUTH_SKIP
     ):
-        if request.headers.get("authorization", "") != f"Bearer {_API_KEY}":
-            return JSONResponse({"detail": "未授权：缺少或错误的 API Key（VR_API_KEY）"}, status_code=401)
+        auth = request.headers.get("authorization", "")
+        if not auth.startswith("Bearer ") or not _verify_token(auth[7:]):
+            return JSONResponse({"detail": "未授权：请先登录"}, status_code=401)
     return await call_next(request)
 
 _CODE_RE = r"^\d{6}$"
@@ -323,7 +367,6 @@ def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
         raise HTTPException(502, f"行情源异常：{e}") from e
 
 
-import time as _time
 _PCT_CACHE: dict = {}
 
 

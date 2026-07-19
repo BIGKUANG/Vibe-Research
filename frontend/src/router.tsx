@@ -1,5 +1,7 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
+import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { Login } from "@/pages/Login";
 import { DailyReview } from "@/pages/DailyReview";
 import { Intel } from "@/pages/Intel";
 import { Sectors } from "@/pages/Sectors";
@@ -12,8 +14,9 @@ import { Notes } from "@/pages/Notes";
 import { Settings } from "@/pages/Settings";
 
 export const router = createBrowserRouter([
+  { path: "/login", element: <Login /> },
   {
-    element: <Layout />,
+    element: <ProtectedRoute><Layout /></ProtectedRoute>,
     children: [
       { path: "/", element: <Navigate to="/daily-review" replace /> },
       { path: "/daily-review", element: <DailyReview /> },

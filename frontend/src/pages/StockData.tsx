@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import {
-  Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
+  FileText, Newspaper, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -15,6 +15,7 @@ import {
   type GlobalStock,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { StockCodeInput } from "@/components/stock/StockCodeInput";
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -102,8 +103,8 @@ export function StockData() {
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
   const runIdRef = useRef(0);
 
-  const run = async () => {
-    const c = code.trim().toUpperCase();
+  const run = async (overrideCode?: string) => {
+    const c = (overrideCode || code).trim().toUpperCase();
     if (!c) { setErr("请输入代码"); return; }
     const rid = ++runIdRef.current;
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
@@ -209,22 +210,13 @@ export function StockData() {
       />
 
       {/* 查询框 */}
-      <div className="mb-5 flex gap-2">
-        <input
+      <div className="mb-5">
+        <StockCodeInput
           value={code}
-          onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
-          onKeyDown={(e) => e.key === "Enter" && run()}
-          placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
-          className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+          onChange={setCode}
+          onSearch={run}
+          loading={loading}
         />
-        <button
-          onClick={run}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          查询
-        </button>
       </div>
 
       {err && (
