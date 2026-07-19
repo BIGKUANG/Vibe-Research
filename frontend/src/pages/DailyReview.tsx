@@ -31,7 +31,7 @@ export function DailyReview() {
   const [turnover, setTurnover] = useState<TurnoverTop | null>(null);
   const [globalIdx, setGlobalIdx] = useState<GlobalIndex[]>([]);
   // 关注股票（自选，存本地）
-  const [watchCodes, setWatchCodes] = useState<string[]>(loadWatch);
+  const [watchCodes, setWatchCodes] = useState<string[]>([]);
   const [watchQuotes, setWatchQuotes] = useState<Record<string, Quote>>({});
   const [watchInput, setWatchInput] = useState("");
   const [watchLoading, setWatchLoading] = useState(false);
@@ -64,7 +64,7 @@ export function DailyReview() {
 
   useEffect(() => {
     loadIndices();
-    refreshWatch(loadWatch());
+    loadWatch().then((cs) => { setWatchCodes(cs); refreshWatch(cs); });
   }, []);
 
   const addWatch = () => {
@@ -77,7 +77,7 @@ export function DailyReview() {
 
   const removeWatch = (c: string) => {
     const next = watchCodes.filter((x) => x !== c);
-    setWatchCodes(next); saveWatch(next); refreshWatch(next);
+    setWatchCodes(next); saveWatch(next).catch(() => {}); refreshWatch(next);
   };
 
   const today = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });

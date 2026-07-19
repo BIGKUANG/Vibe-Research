@@ -17,7 +17,7 @@ import os
 import secrets
 import time as _time
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -32,6 +32,7 @@ import portfolio as pf
 import market
 import myreports as mr
 import reflection as reflect_layer
+import watchlist as wl
 
 
 from version import read_version
@@ -340,6 +341,19 @@ def portfolio_refresh():
         return {"data": pf.get_portfolio()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"刷新失败：{e}") from e
+
+
+@app.get("/api/watchlist")
+def watchlist_get():
+    """自选股列表（JSON 持久化 ~/.vibe-research/watchlist.json）。"""
+    return {"data": wl.load_watchlist()}
+
+
+@app.post("/api/watchlist")
+def watchlist_set(codes: list[str] = Body(...)):
+    """保存自选股列表。"""
+    wl.save_watchlist(codes)
+    return {"ok": True}
 
 
 @app.get("/api/radar")

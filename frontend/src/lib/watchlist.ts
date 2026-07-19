@@ -1,9 +1,28 @@
-// 关注股票（自选股）—— 只存本地 localStorage，不上传、不进仓库。
+// 关注股票（自选股）—— 优先持久化到后端 JSON，localStorage 做缓存降级。
 // 行情复用 /api/quote；复盘时把关注股行情一并喂给用户自己的 AI。
+
+import { api } from "./api";
 
 const KEY = "vr-watchlist";
 
-export function loadWatch(): string[] {
+export async function loadWatch(): Promise<string[]> {
+  // 1. 尝试从后端加载
+  try {
+    const data = await api.watchlistGet();
+    if (Array.isArray(data)) {
+      const codes = data.filter((c) => /^\d{6}$/.test(c));
+      // 同步到 localStorage 做缓存
+      localStorage.setItem(KEY, JSON.stringify(codes));
+      return codes;
+    }
+  } catch {
+    // 2. 后端不可用时（未启动/未登录等），回退 localStorage
+  }
+  return loadLocalWatch();
+}
+
+export function loadLocalWatch(): string[] {
+  // 纯本地读取（用于后端不可用时的兜底）
   try {
     const v = JSON.parse(localStorage.getItem(KEY) || "[]");
     return Array.isArray(v) ? v.filter((c) => /^\d{6}$/.test(c)) : [];
@@ -12,13 +31,21 @@ export function loadWatch(): string[] {
   }
 }
 
-export function saveWatch(codes: string[]) {
+export async function saveWatch(codes: string[]) {
+  const clean = codes.filter((c) => /^\d{6}$/.test(c));
+  // 始终写 localStorage（即时生效）。
   // localStorage 在隐私模式 / 嵌入式浏览器 / 配额写满时会抛异常。
   // 存不下就算了——自选丢失总好过整页崩掉（读取侧同样是 try/catch 兜底）。
   try {
-    localStorage.setItem(KEY, JSON.stringify(codes));
+    localStorage.setItem(KEY, JSON.stringify(clean));
   } catch {
     /* 存储不可用：本次会话内仍可正常使用，只是关掉页面后不保留 */
+  }
+  // 异步写后端
+  try {
+    await api.watchlistSet(clean);
+  } catch {
+    // 静默降级，至少已保存到 localStorage
   }
 }
 

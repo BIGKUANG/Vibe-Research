@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -33,7 +33,7 @@ const saveLive = (on: boolean) => {
 };
 
 export function Watchlist() {
-  const [codes, setCodes] = useState<string[]>(loadWatch);
+  const [codes, setCodes] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [hint, setHint] = useState<string | null>(null);
   // 实时行情默认**关闭**——开着会持续请求，让用户自己决定要不要开。
@@ -48,6 +48,7 @@ export function Watchlist() {
       return next;
     });
   };
+  useEffect(() => { loadWatch().then((cs) => setCodes(cs)); }, []);
 
   const add = () => {
     const { next, added } = addCodes(codes, input);
