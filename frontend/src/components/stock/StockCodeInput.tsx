@@ -110,7 +110,14 @@ export function StockCodeInput({ value, onChange, onSearch, loading }: Props) {
           className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
         />
         <button
-          onClick={() => onSearch(value)}
+          onClick={() => {
+            // 有下拉建议时优先使用第一条，避免中文名称直接传给后端
+            if (suggestions.length > 0) {
+              select(suggestions[0]);
+            } else {
+              onSearch(value);
+            }
+          }}
           disabled={loading}
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
         >
