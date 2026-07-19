@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import math
+import json
 import os
 import random
 import re
@@ -92,6 +93,33 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
     """批量个股实时行情：现价 / 涨跌 / PE / PB / 市值 / 换手 / 涨跌停。"""
     prefixed = [f"{get_prefix(c)}{c}" for c in codes]
     return _parse_gtimg(_fetch_gtimg(prefixed))
+
+
+# 腾讯日K线（后复权），不走 mootdx/akshare 等外部依赖
+def tencent_kline(code: str, offset: int = 120) -> list[dict]:
+    """腾讯财经日K线（前复权），返回 [{close, open, high, low, volume, date}]。"""
+    prefix = get_prefix(code)
+    url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={prefix}{code},day,,,{offset},qfq"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = resp.read()
+    data = json.loads(body.decode("utf-8"))
+    raw = data.get("data", {}).get(f"{prefix}{code}", {})
+    bars = raw.get("qfqday", raw.get("day", []))
+    out = []
+    for b in bars:
+        if not b or len(b) < 2:
+            continue
+        date, close_ = b[0], b[1]
+        out.append({
+            "close": float(close_),
+            "open": float(b[2]) if len(b) > 2 else float(close_),
+            "high": float(b[3]) if len(b) > 3 else float(close_),
+            "low": float(b[4]) if len(b) > 4 else float(close_),
+            "volume": int(float(b[5])) if len(b) > 5 else 0,
+            "date": date,
+        })
+    return out
 
 
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）
@@ -261,10 +289,22 @@ def _mootdx_client():
 
 
 def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
-    """K线：category 4=日 5=周 6=月 11=60分钟。"""
-    client = _mootdx_client()
-    df = client.bars(symbol=code, category=category, offset=offset)
-    return df.to_dict("records") if df is not None and not df.empty else []
+    """K线：category 4=日 5=周 6=月 11=60分钟。
+
+    日K (category=4) 优先使用腾讯复权K线（零依赖），其余走 mootdx。
+    腾讯日K不受代理限制，兼容性好。
+    """
+    if category == 4:
+        try:
+            return tencent_kline(code, offset)
+        except Exception:
+            pass
+    try:
+        client = _mootdx_client()
+        df = client.bars(symbol=code, category=category, offset=offset)
+        return df.to_dict("records") if df is not None and not df.empty else []
+    except Exception:
+        return []
 
 
 def finance(code: str) -> dict:
