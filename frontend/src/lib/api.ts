@@ -277,6 +277,8 @@ export const api = {
   blocks: (code: string) => get<Blocks>(`/blocks?code=${code}`),
   hotConcepts: (code: string) => get<HotConcept[]>(`/hot-concepts?code=${code}`),
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
+  kline: (code: string, category = 4, offset = 120) =>
+    get<Record<string, number>[]>(`/kline?code=${code}&category=${category}&offset=${offset}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>

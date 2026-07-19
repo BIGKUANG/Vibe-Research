@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StockCodeInput } from "@/components/stock/StockCodeInput";
+import { PriceDistribution } from "@/components/stock/PriceDistribution";
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -101,6 +102,8 @@ export function StockData() {
   const [hotCon, setHotCon] = useState<HotConcept[]>([]);
   const [qa, setQa] = useState<QaRow[]>([]);
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
+  const [klineData, setKlineData] = useState<Record<string, number>[] | null>(null);
+  const [klineErr, setKlineErr] = useState<string | null>(null);
   const runIdRef = useRef(0);
 
   const run = async (overrideCode?: string) => {
@@ -110,6 +113,7 @@ export function StockData() {
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null);
+    setKlineData(null); setKlineErr(null);
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {
@@ -136,6 +140,9 @@ export function StockData() {
     api.blocks(c).then(ok(setBlocks)).catch(() => {});
     api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
     api.investorQa(c).then(ok(setQa)).catch(() => {});
+    api.kline(c, 4, 120).then(ok(setKlineData)).catch((e) => {
+      if (rid === runIdRef.current) setKlineErr(e instanceof ApiError ? e.message : null);
+    });
     try {
       // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
       const [v, r, p, f, a] = await Promise.all([
@@ -322,6 +329,16 @@ export function StockData() {
                 {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
               </div>
             </GlassCard>
+          )}
+
+          {/* 价格正态分布 */}
+          {val && (
+            <PriceDistribution
+              data={klineData}
+              currentPrice={val.price}
+              loading={loading}
+              error={klineErr}
+            />
           )}
 
           {fin && (fin.revenue || fin.roe) && (
