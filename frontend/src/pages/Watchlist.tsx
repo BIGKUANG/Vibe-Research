@@ -14,7 +14,7 @@ const color = (v: number | undefined) =>
 const pct = (v: number | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`);
 
 export function Watchlist() {
-  const [codes, setCodes] = useState<string[]>(loadWatch);
+  const [codes, setCodes] = useState<string[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,7 +25,7 @@ export function Watchlist() {
     setLoading(true);
     api.quote(cs.join(",")).then(setQuotes).catch(() => {}).finally(() => setLoading(false));
   };
-  useEffect(() => { refresh(loadWatch()); }, []);
+  useEffect(() => { loadWatch().then((cs) => { setCodes(cs); refresh(cs); }); }, []);
 
   const add = () => {
     const { next, added } = addCodes(codes, input);
@@ -39,7 +39,7 @@ export function Watchlist() {
   };
   const remove = (c: string) => {
     const next = codes.filter((x) => x !== c);
-    setCodes(next); saveWatch(next); refresh(next);
+    setCodes(next); saveWatch(next).catch(() => {}); refresh(next);
   };
 
   const aiContext = useMemo(

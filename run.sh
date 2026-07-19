@@ -331,6 +331,8 @@ cmd_status() {
 # tunnel
 # ===============================================================
 cmd_tunnel() {
+  cmd_start
+  echo ""
   echo "🌐 启动 cloudflared 外网隧道 ..."
   start_tunnel "http://localhost:${FRONTEND_PORT}" "前端"
 }

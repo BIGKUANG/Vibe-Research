@@ -81,7 +81,10 @@ async function request<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET
   }
   if (!resp.ok) {
     if (resp.status === 401) {
-      throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+      // token 过期或无效 → 清除并跳转登录页
+      try { localStorage.removeItem("vr-auth-token"); } catch { /* ignore */ }
+      window.location.href = "/login";
+      throw new ApiError("登录已过期，请重新登录", 401);
     }
     throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
   }
@@ -279,6 +282,8 @@ export const api = {
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   kline: (code: string, category = 4, offset = 120) =>
     get<Record<string, number>[]>(`/kline?code=${code}&category=${category}&offset=${offset}`),
+  watchlistGet: () => get<string[]>("/watchlist"),
+  watchlistSet: (codes: string[]) => request<{ ok: boolean }>("/watchlist", "POST", codes),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>
