@@ -109,6 +109,7 @@ export function DailyReview() {
 
   const sentiment = overview?.sentiment;
   const sectors = overview?.sectors || [];
+  const ROTATION_TOP = 20; // 资金轮动：流入/流出各展示条数
   const sentCells = sentiment ? [
     { k: "上涨家数", v: sentiment.up, up: true },
     { k: "下跌家数", v: sentiment.down, up: false },
@@ -447,8 +448,8 @@ export function DailyReview() {
       </div>
       <div className="mb-2 grid gap-4 md:grid-cols-2">
         {[
-          { title: "流入 Top", icon: TrendingUp, color: "text-danger", rows: sectors.slice(0, 6) },
-          { title: "流出 Top", icon: TrendingDown, color: "text-success", rows: [...sectors].slice(-6).reverse() },
+          { title: "流入 Top", icon: TrendingUp, color: "text-danger", rows: sectors.slice(0, ROTATION_TOP) },
+          { title: "流出 Top", icon: TrendingDown, color: "text-success", rows: [...sectors].slice(-ROTATION_TOP).reverse() },
         ].map((col) => (
           <GlassCard key={col.title}>
             <h4 className={cn("mb-3 flex items-center gap-1.5 text-sm font-semibold", col.color)}><col.icon className="h-4 w-4" /> {col.title}</h4>
