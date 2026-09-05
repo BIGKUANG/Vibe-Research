@@ -23,3 +23,8 @@ dist/
 # 系统与日志
 .DS_Store
 *.log
+logs/
+
+# 前端构建缓存（Vite 依赖缓存 / tsc 增量编译信息）
+.vite/
+*.tsbuildinfo
