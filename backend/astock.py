@@ -396,6 +396,34 @@ def valuation_percentile(code: str, period: str = "近五年") -> dict:
             }
         except Exception:
             continue
+
+    # ROE 历史分位（东财财务指标，近 5 年年报值）。百度股市通估值接口不支持 ROE，
+    # 故单独走东财主要财务指标接口。ROE 与 PE/PB 方向相反：值越大=越低估。
+    try:
+        dfr = ak.stock_financial_analysis_indicator(symbol=code, start_year="2021")
+        if not dfr.empty and "净资产收益率(%)" in dfr.columns:
+            roe = (
+                dfr[["日期", "净资产收益率(%)"]]
+                .dropna()
+                .astype({"净资产收益率(%)": float})
+            )
+            # 只取 12-31 年报值，凑成「近 5 个年度 ROE」——年化口径可比且不被季度季节性干扰
+            monthly = roe["日期"].astype(str).str.slice(0, 10)
+            annual = roe[monthly.str.endswith("-12-31")]
+            vals = sorted(annual["净资产收益率(%)"].tolist())
+            if vals:
+                cur = float(annual["净资产收益率(%)"].iloc[-1])
+                below = sum(1 for x in vals if x < cur)
+                metrics["roe"] = {
+                    "current": round(cur, 2),
+                    "percentile": round(below / max(len(vals) - 1, 1) * 100, 1),
+                    "min": round(vals[0], 2), "max": round(vals[-1], 2),
+                    "p20": round(_q(vals, 0.2), 2), "p50": round(_q(vals, 0.5), 2), "p80": round(_q(vals, 0.8), 2),
+                    "n": len(vals),
+                }
+    except Exception:
+        pass
+
     return {"period": "近5年", "metrics": metrics}
 
 
