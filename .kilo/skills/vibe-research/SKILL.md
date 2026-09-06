@@ -70,6 +70,13 @@ cd desktop && npm test                      # node --test test/*.test.ts
 - 上游重构后主干在 `desktop/`；旧 `backend/`+`frontend/` 是 fork 特性，改动上游后同步需按新架构移植
 - `.gitignore` 已覆盖：`.local/`、`.env*`（保留 `.env.example`）、`node_modules/`、`dist/`、`logs/`、`.vite/`、`*.tsbuildinfo`；不要提交密钥与产物
 
+## 取数能力扩展规则（astock.py 不够用时）
+- `backend/astock.py` 是旧版 Web 应用的取数层（移植自 a-stock-data 的自包含实现）。当开发需求要取的数据 **`astock.py` 不支持** 时：
+  1. 先查 `a-stock-data/SKILL.md`（A股全栈数据工具包 v3.6 参考文档，十层 47 端点，含行情/K线/研报/打板/热榜/资金面/公告/ETF期权等），找到对应功能与接口签名、端点、坑点（其 SKILL.md 里自带可直接移植的样例代码）。
+  2. 按其功能在 `/Users/shendakuang/Desktop/app/simon/Vibe-Research/backend/stock.py`（若无则新建）里开发取数函数——**沿用本项目惯例：自包含移植**（直接 urllib/requests 调端点，不依赖 a-stock-data pip 包），函数风格与 `astock.py` 一致（`DependencyMissing` 惰性依赖、`em_get` 限流、返回 list[dict]）。
+  3. 在 `backend/app.py` 注册 `/api/*` 路由（含鉴权与错误处理），前端 `frontend/src/lib/api.ts` 加类型与方法后接入页面。
+- **a-stock-data 目录约定**：仓库根目录 `a-stock-data/` 只是参考文档目录，**只提交其中的 `SKILL.md`**，其余（源码/示例/资产/`.git.bak`）一律不提交（外层 `.gitignore` 已配置 `a-stock-data/*` + `!a-stock-data/SKILL.md`）。其内嵌 `.git` 已改名 `.git.bak` 保证 SKILL.md 可入库；任何人想恢复该目录为可更新仓库需先把 `.git.bak` 改回 `.git`。
+
 ## 数据纪律边界（源自 AGENTS.md，研究类任务必须遵守）
 - 禁止凭记忆生成行情 / 财务 / 估值 / 一致预期数据；事实数字必须来自取数调用并落盘证据
 - 金额 / 年限 / 比率 / 倍数一律经 `calc/` 确定性函数计算，禁止心算

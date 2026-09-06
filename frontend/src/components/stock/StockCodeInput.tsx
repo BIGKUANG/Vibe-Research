@@ -37,6 +37,9 @@ export function StockCodeInput({ value, onChange, onSearch, loading }: Props) {
     setHighlightIdx(-1);
     // 把 code 直接传给 onSearch，避免 closure 读到旧的 value
     onSearch(s.code);
+    // 主动失焦：下拉项 onMouseDown 用 preventDefault 阻止了 blur，DOM 焦点会停留在输入框上，
+    // 导致下次点击不再触发 onFocus、「focused」永远是 false、下拉提示不再出现。这里主动 blur 复位。
+    inputRef.current?.blur();
   };
 
   // 键盘导航

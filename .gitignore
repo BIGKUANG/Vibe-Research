@@ -28,3 +28,8 @@ logs/
 # 前端构建缓存（Vite 依赖缓存 / tsc 增量编译信息）
 .vite/
 *.tsbuildinfo
+
+# a-stock-data 参考工具包：只入库 SKILL.md 文档,其余(源码/示例/资产/.git.bak)一律不提交
+# 注:嵌套 .git 已改名为 .git.bak,否则外层 git 会把它当子仓库(gitlink)导致 SKILL.md 无法入库
+a-stock-data/*
+!a-stock-data/SKILL.md
