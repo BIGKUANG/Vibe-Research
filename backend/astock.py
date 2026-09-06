@@ -17,6 +17,7 @@ import os
 import random
 import re
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -586,6 +587,42 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
         "amount": _numf(d.get("f6")), "mcap": _numf(d.get("f20")),
         "float_cap": _numf(d.get("f21")), "industry": d.get("f100", "") or "",
     } for d in diff]
+
+
+def ths_hot_list(period: str = "hour", limit: int = 20) -> list[dict]:
+    """同花顺热榜（移植自 a-stock-data §10.2，10jqka dq 接口，零鉴权不封 IP）。
+
+    period: hour=当日人气飙升榜单 / day=当日人气总榜。
+    返回每只: rank / code / name / heat(人气值) / pct(涨跌幅) /
+    rank_chg(排名变化) / concepts(概念标签) / tag(人气标签) / reason(题材解读标题)。
+    ⚠️ 客观公开榜单（同花顺同款），产品侧只做展示——非推荐、非预测、非评分。
+    """
+    if period not in ("hour", "day"):
+        period = "hour"
+    qs = urllib.parse.urlencode({"stock_type": "a", "type": period, "list_type": "normal"})
+    url = f"https://dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock?{qs}"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return []
+    lst = (payload.get("data") or {}).get("stock_list") or []
+    out = []
+    for it in lst[:limit]:
+        tag = it.get("tag") or {}
+        out.append({
+            "rank": it.get("order"),
+            "code": it.get("code", ""),
+            "name": it.get("name", ""),
+            "heat": it.get("rate"),
+            "pct": it.get("rise_and_fall"),
+            "rank_chg": it.get("hot_rank_chg"),
+            "concepts": (tag.get("concept_tag") or [])[:4],
+            "tag": tag.get("popularity_tag", "") or "",
+            "reason": it.get("analyse_title", "") or "",
+        })
+    return out
 
 
 def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str = "",

@@ -396,6 +396,19 @@ def market_emotion():
         raise HTTPException(502, f"短线情绪异常：{e}") from e
 
 
+@app.get("/api/market/ths-hot")
+def market_ths_hot():
+    """同花顺热榜（人气飙升榜 TOP20，客观公开榜单，含缓存 5 分钟）。
+
+    数据源 = 同花顺 dq 人气榜接口（移植自 a-stock-data §10.2，零鉴权）。
+    只呈现事实，不附推荐/评分/预测/买卖时机。
+    """
+    try:
+        return {"data": market.get_ths_hot()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"同花顺热榜异常：{e}") from e
+
+
 @app.get("/api/market/turnover-top")
 def market_turnover_top():
     """全市场成交额榜 Top20（客观公开榜单数据，非推荐/非预测/不评分）。全站共享缓存 5 分钟。"""

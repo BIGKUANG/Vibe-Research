@@ -167,6 +167,16 @@ export interface ShortTermEmotion {
   yzt_count: number;
 }
 
+// 同花顺热榜（客观公开榜单，默认 TOP20）
+export interface ThsHotStock {
+  rank: number; code: string; name: string;
+  heat: string; pct: number; rank_chg: number;
+  concepts: string[]; tag: string; reason: string;
+}
+export interface ThsHot {
+  period: string; updated: string; stocks: ThsHotStock[];
+}
+
 // 全市场成交额榜（客观公开榜单）
 export interface TurnoverStock {
   code: string; name: string;
@@ -261,6 +271,7 @@ export const api = {
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
+  thsHot: () => get<ThsHot>("/market/ths-hot"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),

@@ -128,8 +128,10 @@ def _emotion() -> dict:
     tiers = Counter(min(b, 5) for b in lianban)
     ladder = [{"boards": b, "count": tiers[b], "plus": b >= 5} for b in sorted(tiers)]
 
-    # 连板股清单（2 板+，客观公开榜单数据；按连板数、成交额降序）。
+    # 涨停梯队清单（1 板起，客观公开榜单数据；按连板数、成交额降序）。
     # 产品定位调整（2026-07-05）：从「零标的」→「展示客观榜单但不推荐/不预测/不评分」。
+    # 2026-09-06：默认展示 20 条；只看 2 板+ 时弱市可能只有个位数，故含首板涨停股凑满梯队。
+    limit = 20
     lianban_stocks = sorted(
         ({
             "code": str(p.get("c", "")), "name": p.get("n", ""),
@@ -139,9 +141,9 @@ def _emotion() -> dict:
             "amount": astock._numf(p.get("amount")),      # 成交额,元（'-' 占位归一为 None，防排序对 str 取负崩溃）
             "float_cap": astock._numf(p.get("ltsz")),     # 流通市值,元
             "industry": p.get("hybk", ""),  # 概念/行业
-        } for p in zt if (_num(p.get("lbc")) or 1) >= 2),
+        } for p in zt),
         key=lambda x: (-x["boards"], -(x["amount"] or 0)),
-    )
+    )[:limit]
 
     zt_count, zb_count, yzt_count = len(zt), len(zb), len(yzt)
     attempts = zt_count + zb_count                       # 尝试涨停 = 封住 + 炸板
@@ -169,6 +171,17 @@ def _emotion() -> dict:
 def get_short_term_emotion() -> dict:
     """短线情绪（含缓存，5 分钟）。"""
     return _cached("emotion", _emotion)
+
+
+def get_ths_hot() -> dict:
+    """同花顺热榜（人气榜 TOP20，客观公开榜单，含缓存 5 分钟）。"""
+    def build():
+        return {
+            "period": "hour",
+            "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+            "stocks": astock.ths_hot_list(period="hour", limit=20),
+        }
+    return _cached("ths_hot", build, valid=lambda v: bool(v.get("stocks")))
 
 
 def get_turnover_top() -> dict:

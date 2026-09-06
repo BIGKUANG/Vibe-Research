@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { Disclaimer } from "@/components/ui/Disclaimer";
-import { api, ApiError, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex } from "@/lib/api";
+import { api, ApiError, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type ThsHot, type TurnoverTop, type GlobalIndex } from "@/lib/api";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
@@ -29,37 +29,47 @@ export function DailyReview() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [emotion, setEmotion] = useState<ShortTermEmotion | null>(null);
   const [turnover, setTurnover] = useState<TurnoverTop | null>(null);
+  const [thsHot, setThsHot] = useState<ThsHot | null>(null);
   const [globalIdx, setGlobalIdx] = useState<GlobalIndex[]>([]);
   // 关注股票（自选，存本地）
   const [watchCodes, setWatchCodes] = useState<string[]>([]);
   const [watchQuotes, setWatchQuotes] = useState<Record<string, Quote>>({});
   const [watchInput, setWatchInput] = useState("");
-  const [watchLoading, setWatchLoading] = useState(false);
 
   // 各数据块请求是否已结束：区分「加载中」与「数据源暂不可用」（非交易时段/被限流时后端返回空）
   const [ovDone, setOvDone] = useState(false);
   const [emoDone, setEmoDone] = useState(false);
   const [toDone, setToDone] = useState(false);
+  const [thsDone, setThsDone] = useState(false);
+  // 全局更新：唯一刷新按钮（每日复盘标题后）+ 更新时间
+  const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   const loadIndices = () => {
-    api.indices().then(setIndices).catch(() => setIdxErr(true));
-    api.globalIndices().then(setGlobalIdx).catch(() => {});
-    api.marketOverview().then(setOverview).catch(() => {}).finally(() => setOvDone(true));
-    api.emotion().then(setEmotion).catch(() => {}).finally(() => setEmoDone(true));
-    api.turnoverTop().then(setTurnover).catch(() => {}).finally(() => setToDone(true));
+    setRefreshing(true);
+    Promise.all([
+      api.indices().then(setIndices).catch(() => setIdxErr(true)),
+      api.globalIndices().then(setGlobalIdx).catch(() => {}),
+      api.marketOverview().then(setOverview).catch(() => {}).finally(() => setOvDone(true)),
+      api.emotion().then(setEmotion).catch(() => {}).finally(() => setEmoDone(true)),
+      api.turnoverTop().then(setTurnover).catch(() => {}).finally(() => setToDone(true)),
+      api.thsHot().then(setThsHot).catch(() => {}).finally(() => setThsDone(true)),
+    ]).finally(() => {
+      setRefreshing(false);
+      setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+    });
   };
 
   // 数据块占位：请求没回来 = 加载中；回来了但为空 = 数据源暂不可用（别让用户干等）
   const pending = (done: boolean) => (
     <p className="py-4 text-center text-sm text-muted-foreground/60">
-      {done ? "暂无数据：可能是非交易时段或数据源暂时不可用，可点「大盘指数」旁的刷新重试" : "加载中…"}
+      {done ? "暂无数据：可能是非交易时段或数据源暂时不可用，可点右上角「更新」重试" : "加载中…"}
     </p>
   );
 
   const refreshWatch = (codes: string[]) => {
     if (!codes.length) { setWatchQuotes({}); return; }
-    setWatchLoading(true);
-    api.quote(codes.join(",")).then(setWatchQuotes).catch(() => {}).finally(() => setWatchLoading(false));
+    api.quote(codes.join(",")).then(setWatchQuotes).catch(() => {});
   };
 
   useEffect(() => {
@@ -127,18 +137,28 @@ export function DailyReview() {
         title="每日复盘"
         subtitle={`${today} · 大盘 / 情绪 / 板块资金一屏看全，交给你的 AI 做复盘`}
         actions={
-          <AskAiButton
-            context={`今日大盘数据：${dataSummary}`}
-            label="问 AI"
-            suggestions={["今天大盘怎么走", "哪些指数领涨领跌", "盘面有什么值得注意"]}
-          />
+          <div className="flex items-center gap-2">
+            {updatedAt && <span className="text-[11px] text-muted-foreground/60">更新于 {updatedAt}</span>}
+            <button
+              onClick={() => { loadIndices(); refreshWatch(watchCodes); }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
+              title="更新该页面所有数据"
+            >
+              {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              更新
+            </button>
+            <AskAiButton
+              context={`今日大盘数据：${dataSummary}`}
+              label="问 AI"
+              suggestions={["今天大盘怎么走", "哪些指数领涨领跌", "盘面有什么值得注意"]}
+            />
+          </div>
         }
       />
 
       {/* 1. 大盘指数（实时） */}
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center gap-2">
         <h3 className="text-sm font-semibold text-muted-foreground">大盘指数</h3>
-        <button onClick={loadIndices} className="text-muted-foreground hover:text-primary" title="刷新"><RefreshCw className="h-3.5 w-3.5" /></button>
       </div>
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {indices.length === 0
@@ -179,13 +199,8 @@ export function DailyReview() {
       )}
 
       {/* 2. 关注股票（自选） */}
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center gap-2">
         <h3 className="text-sm font-semibold text-muted-foreground">关注股票</h3>
-        {watchCodes.length > 0 && (
-          <button onClick={() => refreshWatch(watchCodes)} className="text-muted-foreground hover:text-primary" title="刷新价格">
-            {watchLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          </button>
-        )}
       </div>
       <GlassCard className="mb-6">
         <div className="mb-3 flex gap-2">
@@ -259,7 +274,6 @@ export function DailyReview() {
       {/* 4. 市场情绪 */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Gauge className="h-4 w-4" /> 市场情绪</h3>
-        {sentiment?.date && <span className="text-[11px] text-muted-foreground/50">{sentiment.date}</span>}
       </div>
       <GlassCard className="mb-6">
         {!sentiment?.breadth ? (
@@ -294,7 +308,6 @@ export function DailyReview() {
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
         <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪 · 客观公开榜单</span>
-        {emotion?.date && <span className="ml-auto text-[11px] text-muted-foreground/50">{emotion.date}</span>}
       </div>
       <GlassCard className="mb-6">
         {!emotion || emotion.zt_count === undefined ? (
@@ -331,11 +344,11 @@ export function DailyReview() {
                 </div>
               ))}
             </div>
-            {/* 连板股清单（2 板以上，客观公开榜单） */}
+            {/* 连板梯队清单（含首板，客观公开榜单） */}
             <div className="mt-3">
-              <p className="mb-1.5 text-[11px] text-muted-foreground">连板股（2 板以上连续涨停）· 客观公开榜单，非推荐 / 非预测</p>
+              <p className="mb-1.5 text-[11px] text-muted-foreground">涨停梯队（含首板，默认展示 20 条）· 客观公开榜单，非推荐 / 非预测</p>
               {emotion.lianban_stocks.length === 0 ? (
-                <p className="text-xs text-muted-foreground/50">今日无 2 板以上个股</p>
+                <p className="text-xs text-muted-foreground/50">今日无涨停个股</p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -367,11 +380,70 @@ export function DailyReview() {
         )}
       </GlassCard>
 
+      {/* 4b2. 同花顺热榜（客观公开榜单，独立子窗口） */}
+      <div className="mb-3 flex items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 同花顺热榜</h3>
+        <span className="text-[11px] text-muted-foreground/50">人气飙升 · 默认展示 20 条 · 客观公开榜单，非推荐 / 非预测</span>
+      </div>
+      <GlassCard className="mb-6">
+        {!thsDone ? (
+          pending(thsDone)
+        ) : !thsHot || thsHot.stocks.length === 0 ? (
+          pending(thsDone)
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                  {["#", "名称", "涨跌幅", "人气值", "标签", "概念"].map((h) => (
+                    <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {thsHot.stocks.map((s) => (
+                  <tr key={s.code} className="border-b border-border/30">
+                    <td className="whitespace-nowrap px-2 py-2">
+                      <span className="font-mono text-xs text-muted-foreground/70">#{s.rank}</span>
+                      {s.rank_chg > 0 && <span className="ml-1 text-[10px] text-danger" title="排名上升">▲{s.rank_chg}</span>}
+                      {s.rank_chg < 0 && <span className="ml-1 text-[10px] text-success" title="排名下降">▼{-s.rank_chg}</span>}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2">
+                      <span className="font-medium" title={s.reason || undefined}>{s.name}</span>
+                      <span className="text-xs text-muted-foreground/50"> {s.code}</span>
+                    </td>
+                    <td className={cn("px-2 py-2 font-mono", pctColor(s.pct))}>{s.pct > 0 ? "+" : ""}{s.pct}%</td>
+                    <td className="whitespace-nowrap px-2 py-2 font-mono text-muted-foreground">
+                      {typeof s.heat === "string" ? Number(s.heat).toLocaleString("zh-CN") : s.heat}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2">
+                      {s.tag ? (
+                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">{s.tag}</span>
+                      ) : <span className="text-muted-foreground/40">—</span>}
+                    </td>
+                    <td className="px-2 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        {s.concepts.length === 0 ? (
+                          <span className="text-muted-foreground/40">—</span>
+                        ) : (
+                          s.concepts.slice(0, 3).map((c) => (
+                            <span key={c} className="whitespace-nowrap rounded border border-border/50 px-1.5 py-0.5 text-[11px] text-muted-foreground">{c}</span>
+                          ))
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </GlassCard>
+
       {/* 4c. 全市场成交额 TOP20（客观公开榜单） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><BarChart3 className="h-4 w-4" /> 全市场成交额 TOP20</h3>
         <span className="text-[11px] text-muted-foreground/50">客观公开榜单，非推荐 / 非预测 / 不构成投资建议</span>
-        {turnover?.updated && <span className="ml-auto text-[11px] text-muted-foreground/50">{turnover.updated}</span>}
       </div>
       <GlassCard className="mb-6">
         {!turnover || turnover.stocks.length === 0 ? (
