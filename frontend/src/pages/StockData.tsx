@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { StockCodeInput } from "@/components/stock/StockCodeInput";
 import { PriceDistribution } from "@/components/stock/PriceDistribution";
+import { KLineChart } from "@/components/stock/KLineChart";
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -360,6 +361,16 @@ export function StockData() {
               <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
             )}
           </GlassCard>
+
+          {/* K 线图（日K · 前复权）——上方独立子窗口 */}
+          {val && (
+            <KLineChart
+              data={klineData}
+              symbol={`${val.name}（${val.code}）`}
+              loading={loading}
+              error={klineErr}
+            />
+          )}
 
           {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
