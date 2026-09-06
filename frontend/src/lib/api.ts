@@ -117,7 +117,7 @@ export interface ValMetric {
   p20: number; p50: number; p80: number; n: number;
 }
 export interface ValPercentile {
-  period: string; metrics: { pe_ttm?: ValMetric; pb?: ValMetric };
+  period: string; metrics: { pe_ttm?: ValMetric; pb?: ValMetric; mcap?: ValMetric };
 }
 
 export interface Announcement {

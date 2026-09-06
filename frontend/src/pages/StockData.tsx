@@ -53,17 +53,19 @@ function Metric({ k, v, sub }: { k: string; v: string; sub?: string }) {
 }
 
 // 估值历史分位带（理杏仁式）：绿=低估区 / 灰=合理区 / 红=高估区；只给位置，不划买卖。
-function ValBand({ label, m }: { label: string; m: ValMetric }) {
+// fmt 可选：数值格式化（如总市值 亿元→万亿/亿元），缺省原样显示。
+function ValBand({ label, m, fmt }: { label: string; m: ValMetric; fmt?: (v: number) => string }) {
   const span = Math.max(m.max - m.min, 1e-6);
   const pos = (v: number) => Math.min(100, Math.max(0, ((v - m.min) / span) * 100));
   const p20 = pos(m.p20), p80 = pos(m.p80), cur = pos(m.current);
   const zoneColor = m.percentile < 20 ? "text-success" : m.percentile > 80 ? "text-danger" : "text-muted-foreground";
   const zoneLabel = m.percentile < 20 ? "低估区" : m.percentile > 80 ? "高估区" : "合理区";
+  const show = fmt ?? ((v: number) => `${v}`);
   return (
     <div>
       <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-1 text-sm">
         <span className="font-medium">{label} <span className="text-xs text-muted-foreground/60">{m.n} 点</span></span>
-        <span className="text-muted-foreground">当前 <b className="font-mono text-foreground">{m.current}</b> · 近5年 <b className={cn("font-mono", zoneColor)}>{m.percentile}%</b> 分位（<span className={zoneColor}>{zoneLabel}</span>）</span>
+        <span className="text-muted-foreground">当前 <b className="font-mono text-foreground">{show(m.current)}</b> · 近5年 <b className={cn("font-mono", zoneColor)}>{m.percentile}%</b> 分位（<span className={zoneColor}>{zoneLabel}</span>）</span>
       </div>
       <div className="relative h-2.5 w-full overflow-hidden rounded-full">
         <div className="absolute inset-0 flex">
@@ -74,7 +76,7 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
         <div className="absolute top-1/2 h-4 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded bg-foreground shadow" style={{ left: `${cur}%` }} />
       </div>
       <div className="mt-1 flex justify-between font-mono text-[10px] text-muted-foreground/60">
-        <span>低 {m.min}</span><span>20% {m.p20}</span><span>中 {m.p50}</span><span>80% {m.p80}</span><span>高 {m.max}</span>
+        <span>低 {show(m.min)}</span><span>20% {show(m.p20)}</span><span>中 {show(m.p50)}</span><span>80% {show(m.p80)}</span><span>高 {show(m.max)}</span>
       </div>
     </div>
   );
@@ -190,7 +192,7 @@ export function StockData() {
   const aiContext = val
     ? `个股：${val.name}（${val.code}）\n现价 ${val.price} · PE(TTM) ${val.pe_ttm} · PB ${val.pb} · 市值 ${val.mcap_yi}亿\n` +
       `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count} 家\n` +
-      (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位\n` : "") +
+      (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位、总市值(规模) 处于 ${pctl.metrics.mcap?.percentile ?? "—"}% 分位\n` : "") +
       (fin?.revenue ? `财务(${fin.period ?? "—"})：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "—"})、净利 ${fin.net_profit ?? "—"}(同比${fin.net_profit_yoy ?? "—"})、ROE ${fin.roe ?? "—"}、毛利率 ${fin.gross_margin ?? "—"}\n` : "") +
       (anns.length ? `近期公告：${anns.slice(0, 5).map((a) => a.title.replace(/^[^:：]*[:：]/, "")).join("；")}\n` : "") +
       `近期研报：${reports.slice(0, 5).map((r) => r.title).join("；") || "无"}`
@@ -375,13 +377,14 @@ export function StockData() {
           {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
 
-          {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
+          {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb || pctl.metrics.mcap) && (
             <GlassCard glow className="mb-4">
               <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><LineChart className="h-4 w-4 text-primary" /> 估值历史分位 · {pctl.period}</h3>
-              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区。只显示当前处于历史什么位置，不构成买卖建议。</p>
+              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区。只显示当前处于历史什么位置，不构成买卖建议。总市值为规模分位，非贵贱分位。</p>
               <div className="space-y-4">
                 {pctl.metrics.pe_ttm && <ValBand label="PE-TTM" m={pctl.metrics.pe_ttm} />}
                 {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
+                {pctl.metrics.mcap && <ValBand label="总市值（规模）" m={pctl.metrics.mcap} fmt={(v) => (v >= 10000 ? `${(v / 10000).toFixed(2)} 万亿` : `${v.toFixed(0)} 亿`)} />}
               </div>
             </GlassCard>
           )}

@@ -378,7 +378,7 @@ def valuation_percentile(code: str, period: str = "近五年") -> dict:
         return vals[lo] * (1 - frac) + vals[lo + 1] * frac
 
     metrics = {}
-    for key, ind in (("pe_ttm", "市盈率(TTM)"), ("pb", "市净率")):
+    for key, ind in (("pe_ttm", "市盈率(TTM)"), ("pb", "市净率"), ("mcap", "总市值")):
         try:
             df = ak.stock_zh_valuation_baidu(symbol=code, indicator=ind, period=period)
             raw = df.iloc[:, 1].dropna().astype(float).tolist()
