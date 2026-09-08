@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { CandlestickChart } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { cn } from "@/lib/utils";
@@ -19,13 +19,13 @@ interface Props {
   error?: string | null;
 }
 
-// A 股配色：红涨绿跌（与全站一致）
-const UP = "#f43f5e";    // 阳线（涨）
-const DOWN = "#10b981";  // 阴线（跌）
+// A 股配色：红涨绿跌（高对比，一眼可辨）
+const UP = "#ff3b30";    // 阳线（涨）红
+const DOWN = "#00c853";  // 阴线（跌）绿
 const MA_COLORS = ["#fbbf24", "#60a5fa", "#a78bfa"]; // MA5 / MA10 / MA20
 const GRID = "rgba(148,163,184,0.14)";
 
-const M_L = 46, M_R = 14, M_T = 12, M_B = 26;
+const M_L = 46, M_R = 48, M_T = 12, M_B = 26;
 const STEP = 9, CW = 7, PRICE_H = 240, VOL_H = 52, GAP = 6;
 
 function ma(closes: number[], n: number): (number | null)[] {
@@ -42,6 +42,13 @@ function ma(closes: number[], n: number): (number | null)[] {
 export function KLineChart({ data, symbol, loading, error }: Props) {
   const rows = useMemo<KRow[]>(() => (data ?? []) as unknown as KRow[], [data]);
   const [hover, setHover] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 图表横向可滚动且默认停在左侧；数据更新后自动滚到最右，让最新的 K 线与日期立刻可见
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [rows.length]);
 
   const geom = useMemo(() => {
     if (rows.length === 0) return null;
@@ -123,7 +130,7 @@ export function KLineChart({ data, symbol, loading, error }: Props) {
         <span className="text-muted-foreground/50">{active ? fmtDate(active.date) : "--"}</span>
       </div>
 
-      <div className="mt-2 overflow-x-auto">
+      <div ref={scrollRef} className="mt-2 overflow-x-auto">
         <svg
           width={geom.W} height={geom.H}
           className="block"
@@ -190,12 +197,19 @@ export function KLineChart({ data, symbol, loading, error }: Props) {
               stroke="#94a3b8" strokeWidth={1} strokeDasharray="2 3" opacity={0.8} />
           )}
 
-          {/* 日期刻度 */}
-          {dateTicks.map((i) => (
-            <text key={i} x={M_L + i * STEP + STEP / 2} y={geom.H - 8} textAnchor="middle" fontSize="10" fill="#94a3b8">
-              {fmtDate(rows[i].date)}
-            </text>
-          ))}
+          {/* 日期刻度：末根右对齐避免出界，其余居中 */}
+          {dateTicks.map((i) => {
+            const isLast = i === rows.length - 1;
+            return (
+              <text key={i}
+                x={M_L + i * STEP + STEP / 2 + (isLast ? -4 : 0)}
+                y={geom.H - 8}
+                textAnchor={isLast ? "end" : "middle"}
+                fontSize="10" fill="#94a3b8">
+                {fmtDate(rows[i].date)}
+              </text>
+            );
+          })}
         </svg>
       </div>
       <p className="mt-1 text-[11px] text-muted-foreground/50">悬停查看单日明细。客观行情数据，非推荐 / 非预测。</p>
