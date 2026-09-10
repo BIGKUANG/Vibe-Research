@@ -111,12 +111,16 @@ def tencent_kline(code: str, offset: int = 120) -> list[dict]:
     for b in bars:
         if not b or len(b) < 2:
             continue
-        date, close_ = b[0], b[1]
+        # 腾讯日K行格式：[日期, 开盘, 收盘, 最高, 最低, 成交量, ...]（akshare 同口径）。
+        # ⚠️ 此前 close=b[1]、open=b[2] 恰好颠倒，导致涨跌判定/蜡烛颜色正好反过来（跌标红、涨标绿）。
+        date = b[0]
+        open_ = float(b[1])
+        close_ = float(b[2]) if len(b) > 2 else open_
         out.append({
-            "close": float(close_),
-            "open": float(b[2]) if len(b) > 2 else float(close_),
-            "high": float(b[3]) if len(b) > 3 else float(close_),
-            "low": float(b[4]) if len(b) > 4 else float(close_),
+            "close": close_,
+            "open": open_,
+            "high": float(b[3]) if len(b) > 3 else close_,
+            "low": float(b[4]) if len(b) > 4 else close_,
             "volume": int(float(b[5])) if len(b) > 5 else 0,
             "date": date,
         })
