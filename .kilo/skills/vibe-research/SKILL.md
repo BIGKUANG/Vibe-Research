@@ -5,16 +5,21 @@ description: Vibe-Research 项目开发 SOP——本仓库双应用结构（旧�
 
 # Vibe-Research 项目开发 SOP
 
-## 仓库结构：两个应用并存（先确认改哪边）
+## 仓库结构：两代应用 + 共享底座（先确认改哪边）
 
 - **旧版 Web 应用**（fork 特性主线，用 `run.sh` 启动）
-  - `backend/`：Python FastAPI（uvicorn :8900），含登录鉴权（VR_AUTH_USER/PASS）、股票代码自动补全接口、价格分布 K 线等 fork 特有功能
-  - `frontend/`：Vite + React（:8901），`@` 别名指向 `frontend/src`
-- **新版 Desktop 应用**（上游重构主线）
-  - `desktop/`：Vite + React，`@` 别名指向 `desktop/src/verticals/finance`
-  - 多垂类外壳结构：`desktop/src/verticals/finance/` 是金融垂类，`desktop/src/core/` 是 AI 对话等公共层
-  - 数据来自 Node 编排器底座，浏览器不持有后端 token（由 Vite 代理注入，见 `desktop/vite.config.ts`）
-- 上游在 `d8c80d4..09e8404` 之间做过一次彻底重构（旧 backend/frontend 迁移为 desktop 多垂类）。**改代码前先确认目标应用**，两个应用互不构建彼此的代码。
+  - `backend/`：Python FastAPI（uvicorn :8900），含登录鉴权（VR_AUTH_USER/PASS）、股票代码自动补全、K线/新闻等 fork 特有接口；**股票取数统一写在 `backend/astock.py`**
+  - `frontend/`：Vite + React（:8901），`@` 别名 → `frontend/src`；`/api` 代理到后端 :8900
+- **新版 Desktop 应用**（上游主线）
+  - `desktop/`：Vite + React 本地浏览器 UI；`@` 别名 → `desktop/src/verticals/finance`（金融垂类包），公共层在 `desktop/src/core/{ai,data,lib}`
+  - `desktop/vite.config.ts` 把 `/api` 代理到编排器 `http://127.0.0.1:8765` 并注入 token（浏览器不持有后端 token）
+- **共享底座模块**（新版架构，均在仓库根目录）
+  - `orchestrator/`：Node/TS 薄编排器（Agent 编排 + validator + API + MCP + 资料库/报告归档），本地 API 默认 `127.0.0.1:8765`
+  - `calc/`：确定性计算库（金额/年限/比率/倍数一律走这里，契约见 `calc/SPEC.md`）
+  - `datasources/`：数据端点注册表 / 目录 / 健康巡检（`registry.json`、`CATALOG.md`）
+  - `providers/`：模型 provider 模板（只引用环境变量名，不含真实密钥）
+  - `backtest/`：确定性回测引擎；`knowledge/`：公司知识层；`scripts/`：初始化与体检；`website/`：官网源码
+- 两代应用**互不构建彼此代码**：改旧版走 `run.sh`；改新版要同时跑 orchestrator + desktop。上游在 `d8c80d4..09e8404` 做过彻底重构（旧 backend/frontend → desktop 多垂类），上述底座模块属新版主线。
 
 ## 常用命令
 
@@ -33,12 +38,22 @@ cd frontend && npm test           # 测试（node --test tests/*.test.mjs）
 cd backend && python3 -m pytest tests/ -q     # 后端测试
 ```
 
-### 新版 Desktop 应用
+### 新版 Desktop 应用 + 编排器
 ```bash
-cd desktop && npm install && npm run dev    # 需要底座/编排器 API 在跑
+npm install --prefix orchestrator
+node orchestrator/src/api.ts --port 8765           # 启动编排器 API（desktop 的底座）
+cd orchestrator && npm run typecheck && npm test    # 编排器类型检查 / 测试
+
+cd desktop && npm install && npm run dev    # 需编排器 API 在跑（:8765）
 cd desktop && npm run typecheck             # tsc --noEmit
 cd desktop && npm run build                 # tsc --noEmit && vite build
 cd desktop && npm test                      # node --test test/*.test.ts
+```
+
+### 初始化与体检（新版）
+```bash
+./scripts/init      # 幂等初始化 .local/ 私有层（目录 / 配置骨架 / .gitignore）
+./scripts/doctor    # 体检：引擎/登录态/skills/Python 依赖/calc/注册表/写权限/密钥扫描；加 --net 查数据源连通
 ```
 
 ## Git 工作流
@@ -70,10 +85,11 @@ cd desktop && npm test                      # node --test test/*.test.ts
 - 上游重构后主干在 `desktop/`；旧 `backend/`+`frontend/` 是 fork 特性，改动上游后同步需按新架构移植
 - `.gitignore` 已覆盖：`.local/`、`.env*`（保留 `.env.example`）、`node_modules/`、`dist/`、`logs/`、`.vite/`、`*.tsbuildinfo`；不要提交密钥与产物
 
-## 取数能力扩展规则（astock.py 不够用时）
-- `backend/astock.py` 是旧版 Web 应用的取数层（移植自 a-stock-data 的自包含实现）。当开发需求要取的数据 **`astock.py` 不支持** 时：
-  1. 先查 `a-stock-data/SKILL.md`（A股全栈数据工具包 v3.6 参考文档，十层 47 端点，含行情/K线/研报/打板/热榜/资金面/公告/ETF期权等），找到对应功能与接口签名、端点、坑点（其 SKILL.md 里自带可直接移植的样例代码）。
-  2. 按其功能在 `/Users/shendakuang/Desktop/app/simon/Vibe-Research/backend/stock.py`（若无则新建）里开发取数函数——**沿用本项目惯例：自包含移植**（直接 urllib/requests 调端点，不依赖 a-stock-data pip 包），函数风格与 `astock.py` 一致（`DependencyMissing` 惰性依赖、`em_get` 限流、返回 list[dict]）。
+## 股票取数规则（统一在 astock.py 实现）
+- **开发 vibe-research 功能时，凡需要获取股票数据**：先看 `backend/astock.py` 是否已支持该数据。
+- 若 `astock.py` 不支持：
+  1. 去 `a-stock-data/SKILL.md`（A股全栈数据工具包 v3.6 参考文档，十层 47 端点，含行情/K线/研报/新闻/打板/热榜/资金面/公告/ETF期权等）查看该数据的获取方法、接口签名、端点与坑点（文档自带可直接移植的样例代码）。
+  2. **参考该方法在 `backend/astock.py` 中实现取数函数**（不要另起新模块）——沿用本项目惯例：**自包含移植**（直接 urllib/requests 调端点，不依赖 a-stock-data pip 包），函数风格与既有代码一致（`DependencyMissing` 惰性依赖、`em_get` 限流、返回 list[dict]、字段命名与调用方对齐）。
   3. 在 `backend/app.py` 注册 `/api/*` 路由（含鉴权与错误处理），前端 `frontend/src/lib/api.ts` 加类型与方法后接入页面。
 - **a-stock-data 目录约定**：仓库根目录 `a-stock-data/` 只是参考文档目录，**只提交其中的 `SKILL.md`**，其余（源码/示例/资产/`.git.bak`）一律不提交（外层 `.gitignore` 已配置 `a-stock-data/*` + `!a-stock-data/SKILL.md`）。其内嵌 `.git` 已改名 `.git.bak` 保证 SKILL.md 可入库；任何人想恢复该目录为可更新仓库需先把 `.git.bak` 改回 `.git`。
 
@@ -84,7 +100,10 @@ cd desktop && npm test                      # node --test test/*.test.ts
 - 研究类任务：加载 `.agents/skills/` 下对应 SOP（company-research / data-access / valuation / earnings-analysis / industry-chain / catalyst-risk），按六阶段流程产出结构化产物
 
 ## 常见任务速查
+- **先判断改哪代应用**：旧版 = `backend/` + `frontend/`（`run.sh`）；新版 = `desktop/` + 底座模块（orchestrator/calc/datasources…）；两者互不影响
 - 想把旧版跑起来：`./run.sh start`，浏览器开 `http://localhost:8901`
-- 想跑新版桌面应用：`cd desktop && npm run dev`
+- 想跑新版桌面应用：先 `node orchestrator/src/api.ts --port 8765`，再 `cd desktop && npm run dev`
+- 金额/比率/估值计算：走 `calc/`（不要手搓公式）；取数与端点目录见 `datasources/`
+- 初始化私有层 / 体检：`./scripts/init`、`./scripts/doctor`（可加 `--net`）
 - 修类型/构建错误：进入对应目录跑 `npm run typecheck` / `npm run build`，按报错逐个修
 - 后端启动失败：先看 `logs/backend.log`，常见原因是缺模块（见 `backend/requirements.txt`）或端口占用

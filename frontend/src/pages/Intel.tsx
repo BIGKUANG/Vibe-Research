@@ -215,7 +215,7 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
         let dep: string | null = null;
         const res = await Promise.all(
           cs.map((c) =>
-            api.news(c).then((n) => ({ c, n })).catch((e) => {
+            api.news(c).then((r) => ({ c, n: r.items })).catch((e) => {
               if (e instanceof ApiError && e.status === 501) dep = e.message;
               return { c, n: [] as NewsItem[] };
             }),

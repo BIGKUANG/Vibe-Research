@@ -121,7 +121,7 @@ export interface ValPercentile {
 }
 
 export interface Announcement {
-  date: string; title: string; type: string; url: string;
+  date: string; title: string; type: string; url: string; pdf_url?: string;
 }
 
 export interface Financials {
@@ -133,7 +133,20 @@ export interface Financials {
 }
 
 export interface NewsItem {
-  新闻标题?: string; 发布时间?: string; 文章来源?: string; 新闻链接?: string;
+  新闻标题?: string; 新闻内容?: string; 发布时间?: string; 文章来源?: string; 新闻链接?: string;
+}
+
+// 分页信封（研报 / 巨潮公告 / 个股新闻）
+export interface Paged<T> {
+  items: T[]; page: number; page_size: number; total: number; total_pages: number;
+}
+
+// 公司基本档案（东财 push2 直连，§6.3）
+export interface CompanyInfo {
+  code: string; name: string; industry: string;
+  total_shares: number | null; float_shares: number | null;
+  mcap: number | null; float_mcap: number | null;
+  list_date: string; price: number | null;
 }
 
 export interface IndexQuote {
@@ -289,9 +302,11 @@ export const api = {
   percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),
   financials: (code: string) => get<Financials>(`/financials?code=${code}`),
   announcements: (code: string) => get<Announcement[]>(`/announcements?code=${code}`),
+  info: (code: string) => get<CompanyInfo>(`/info?code=${code}`),
+  disclosure: (code: string, limit = 15, page = 1) => get<Paged<Announcement>>(`/disclosure?code=${code}&limit=${limit}&page=${page}`),
   quote: (codes: string) => get<Record<string, Quote>>(`/quote?codes=${codes}`),
-  reports: (code: string) => get<Report[]>(`/reports?code=${code}`),
-  news: (code: string) => get<NewsItem[]>(`/news?code=${code}`),
+  reports: (code: string, page = 1, pageSize = 15) => get<Paged<Report>>(`/reports?code=${code}&page=${page}&page_size=${pageSize}`),
+  news: (code: string, limit = 15, page = 1) => get<Paged<NewsItem>>(`/news?code=${code}&limit=${limit}&page=${page}`),
   margin: (code: string) => get<MarginRow[]>(`/margin?code=${code}`),
   blockTrade: (code: string) => get<BlockTradeRow[]>(`/block-trade?code=${code}`),
   holders: (code: string) => get<HolderRow[]>(`/holders?code=${code}`),

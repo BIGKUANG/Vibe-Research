@@ -547,24 +547,25 @@ def valuation(code: str = Query(...)):
 
 
 @app.get("/api/reports")
-def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5)):
-    """个股研报列表（东财，含 PDF 链接）。仅需 requests。"""
+def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5),
+            page: int | None = Query(None, ge=1), page_size: int = Query(15, ge=1, le=50)):
+    """个股研报列表（东财，含 PDF 链接）。传 page 则按单页返回（页面分页用）。"""
     code = _validate(code)
     try:
-        rows = astock.eastmoney_reports(code, max_pages=pages)
-        for r in rows:
+        res = astock.eastmoney_reports(code, max_pages=pages, page=page, page_size=page_size)
+        for r in res.get("items", []):
             r["pdfUrl"] = astock.pdf_url(r.get("infoCode", "")) if r.get("infoCode") else None
-        return {"data": rows}
+        return {"data": res}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"研报源异常：{e}") from e
 
 
 @app.get("/api/news")
-def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50)):
-    """个股新闻（东财，需 akshare）。"""
+def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50), page: int = Query(1, ge=1)):
+    """个股新闻（东财 search-api-web）。page 用于翻更早的新闻。"""
     code = _validate(code)
     try:
-        return {"data": astock.stock_news(code, limit=limit)}
+        return {"data": astock.stock_news(code, limit=limit, page=page)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -584,11 +585,11 @@ def info(code: str = Query(...)):
 
 
 @app.get("/api/disclosure")
-def disclosure(code: str = Query(...)):
-    """巨潮公告列表（需 akshare）。"""
+def disclosure(code: str = Query(...), limit: int = Query(15, ge=1, le=50), page: int = Query(1, ge=1)):
+    """巨潮公告列表（cninfo 官方全文检索，含 PDF 直链）。默认 15 条；page 用于翻更早公告。"""
     code = _validate(code)
     try:
-        return {"data": astock.disclosure(code)}
+        return {"data": astock.disclosure(code, limit=limit, page=page)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001

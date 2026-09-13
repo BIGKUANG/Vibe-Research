@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 import {
   FileText, Newspaper, AlertCircle, LineChart, BarChart3, Megaphone,
-  Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
+  Wallet, Trophy, CalendarClock, Boxes, MessageSquare, Download,
+  ChevronLeft, ChevronRight, Building2,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -12,7 +13,7 @@ import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
-  type GlobalStock, type HkCashflow,
+  type GlobalStock, type HkCashflow, type CompanyInfo,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StockCodeInput } from "@/components/stock/StockCodeInput";
@@ -21,6 +22,9 @@ import { KLineChart } from "@/components/stock/KLineChart";
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
+
+// 研报 / 公告 / 新闻 分页每页条数
+const PAGE_SIZE = 15;
 
 const fmt = (v: number | null | undefined, suffix = "") =>
   v === null || v === undefined ? "—" : `${v}${suffix}`;
@@ -102,6 +106,26 @@ function ValBand({ label, m, invert = false, fmt }:
   );
 }
 
+// 分页控件：上一页 / 第 N / M 页 / 下一页（供研报、巨潮公告、新闻复用）
+function Pager({ page, totalPages, loading, onPrev, onNext }: {
+  page: number; totalPages: number; loading: boolean; onPrev: () => void; onNext: () => void;
+}) {
+  const btn = "inline-flex items-center gap-0.5 rounded border border-border/60 px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40";
+  return (
+    <div className="mt-3 flex items-center justify-end gap-2">
+      <button onClick={onPrev} disabled={page <= 1 || loading} className={btn}>
+        <ChevronLeft className="h-3 w-3" /> 上一页
+      </button>
+      <span className="text-xs text-muted-foreground">
+        第 {page} 页{totalPages > 0 ? ` / 共 ${totalPages} 页` : ""}
+      </span>
+      <button onClick={onNext} disabled={totalPages <= 0 || page >= totalPages || loading} className={btn}>
+        下一页 <ChevronRight className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
 export function StockData() {
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -128,7 +152,42 @@ export function StockData() {
   const [cashflow, setCashflow] = useState<HkCashflow | null>(null);  // 港股现金流量表（仅港股）
   const [klineData, setKlineData] = useState<Record<string, number>[] | null>(null);
   const [klineErr, setKlineErr] = useState<string | null>(null);
+  const [company, setCompany] = useState<CompanyInfo | null>(null);  // 公司基本档案
+  // 研报 / 巨潮公告 / 新闻 分页（默认每页 PAGE_SIZE 条，可翻更早数据）
+  const [reportsPage, setReportsPage] = useState(1);
+  const [annsPage, setAnnsPage] = useState(1);
+  const [newsPage, setNewsPage] = useState(1);
+  const [reportsTotalPages, setReportsTotalPages] = useState(0);
+  const [annsTotalPages, setAnnsTotalPages] = useState(0);
+  const [newsTotalPages, setNewsTotalPages] = useState(0);
+  const [pageLoading, setPageLoading] = useState<"" | "reports" | "anns" | "news">("");
   const runIdRef = useRef(0);
+
+  // 翻页：命中空页时回退一页（避免翻到空白页）；记录总页数供 Pager 显示
+  const gotoReports = (p: number) => {
+    const c = val?.code; if (!c || p < 1) return;
+    setPageLoading("reports");
+    api.reports(c, p, PAGE_SIZE)
+      .then((res) => { if (p > 1 && res.items.length === 0) { setReportsPage(p - 1); return; }
+        setReports(res.items); setReportsPage(p); setReportsTotalPages(res.total_pages); })
+      .catch(() => {}).finally(() => setPageLoading(""));
+  };
+  const gotoAnns = (p: number) => {
+    const c = val?.code; if (!c || p < 1) return;
+    setPageLoading("anns");
+    api.disclosure(c, PAGE_SIZE, p)
+      .then((res) => { if (p > 1 && res.items.length === 0) { setAnnsPage(p - 1); return; }
+        setAnns(res.items); setAnnsPage(p); setAnnsTotalPages(res.total_pages); })
+      .catch(() => {}).finally(() => setPageLoading(""));
+  };
+  const gotoNews = (p: number) => {
+    const c = val?.code; if (!c || p < 1) return;
+    setPageLoading("news");
+    api.news(c, PAGE_SIZE, p)
+      .then((res) => { if (p > 1 && res.items.length === 0) { setNewsPage(p - 1); return; }
+        setNews(res.items); setNewsPage(p); setNewsTotalPages(res.total_pages); })
+      .catch(() => {}).finally(() => setPageLoading(""));
+  };
 
   const run = async (overrideCode?: string) => {
     const c = (overrideCode || code).trim().toUpperCase();
@@ -138,6 +197,10 @@ export function StockData() {
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null); setCashflow(null);
     setKlineData(null); setKlineErr(null);
+    setCompany(null);
+    // 分页复位（新查询从第 1 页开始）
+    setReportsPage(1); setAnnsPage(1); setNewsPage(1);
+    setReportsTotalPages(0); setAnnsTotalPages(0); setNewsTotalPages(0);
 
     // 6 位纯数字 = A 股；否则（字母 / 港股短代码）走美股 / 港股（global-stock-data）
     if (!/^\d{6}$/.test(c)) {
@@ -166,27 +229,29 @@ export function StockData() {
     api.blocks(c).then(ok(setBlocks)).catch(() => {});
     api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
     api.investorQa(c).then(ok(setQa)).catch(() => {});
+    api.info(c).then(ok(setCompany)).catch(() => {});
     api.kline(c, 4, 120).then(ok(setKlineData)).catch((e) => {
       if (rid === runIdRef.current) setKlineErr(e instanceof ApiError ? e.message : null);
     });
     try {
-      // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
+      // 行情+估值+研报+历史分位+财务+巨潮公告（含 PDF 下载；新闻单独降级）——均取第 1 页
+      const emptyPage = { items: [], page: 1, page_size: PAGE_SIZE, total: 0, total_pages: 0 };
       const [v, r, p, f, a] = await Promise.all([
         api.valuation(c),
-        api.reports(c).catch(() => []),
+        api.reports(c, 1, PAGE_SIZE).catch(() => emptyPage),
         api.percentile(c).catch(() => null),
         api.financials(c).catch(() => null),
-        api.announcements(c).catch(() => []),
+        api.disclosure(c, PAGE_SIZE, 1).catch(() => emptyPage),
       ]);
       if (rid !== runIdRef.current) return;
       setVal(v);
-      setReports(r);
+      setReports(r.items); setReportsTotalPages(r.total_pages);
       setPctl(p);
       setFin(f);
-      setAnns(a);
+      setAnns(a.items); setAnnsTotalPages(a.total_pages);
       try {
-        const n = await api.news(c);
-        if (rid === runIdRef.current) setNews(n);
+        const n = await api.news(c, PAGE_SIZE, 1);
+        if (rid === runIdRef.current) { setNews(n.items); setNewsTotalPages(n.total_pages); }
       } catch (e) {
         if (rid === runIdRef.current && e instanceof ApiError && e.status === 501) setDepNote(e.message);
       }
@@ -214,7 +279,7 @@ export function StockData() {
       `26E EPS ${val.eps_26e ?? "—"} · 前向PE ${val.pe_26e ?? "—"} · PEG ${val.peg ?? "—"} · 消化 ${val.digest_years ?? "—"}年 · 机构覆盖 ${val.analyst_count} 家\n` +
       (pctl?.metrics.pe_ttm ? `估值历史分位(近5年)：PE-TTM 处于 ${pctl.metrics.pe_ttm.percentile}% 分位、PB 处于 ${pctl.metrics.pb?.percentile ?? "—"}% 分位、总市值(规模) 处于 ${pctl.metrics.mcap?.percentile ?? "—"}% 分位、ROE(年报,值越大越低估) 处于 ${pctl.metrics.roe?.percentile ?? "—"}% 分位\n` : "") +
       (fin?.revenue ? `财务(${fin.period ?? "—"})：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "—"})、净利 ${fin.net_profit ?? "—"}(同比${fin.net_profit_yoy ?? "—"})、ROE ${fin.roe ?? "—"}、毛利率 ${fin.gross_margin ?? "—"}\n` : "") +
-      (anns.length ? `近期公告：${anns.slice(0, 5).map((a) => a.title.replace(/^[^:：]*[:：]/, "")).join("；")}\n` : "") +
+      (anns.length ? `巨潮公告：${anns.slice(0, 5).map((a) => a.title.replace(/^[^:：]*[:：]/, "")).join("；")}\n` : "") +
       `近期研报：${reports.slice(0, 5).map((r) => r.title).join("；") || "无"}`
     : "还没查询个股。输入 6 位代码后可让 AI 基于客观数据帮你分析。";
 
@@ -394,6 +459,30 @@ export function StockData() {
             />
           )}
 
+          {/* 公司基本档案（行业 / 总股本 / 流通股 / 流通市值 / 上市日期）——K线之下、财报速览之上 */}
+          {company && (company.industry || company.total_shares != null) && (
+            <GlassCard className="mb-4">
+              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
+                <Building2 className="h-4 w-4 text-primary" /> 公司基本档案
+                <span className="text-xs font-normal text-muted-foreground/60">东财 · 静态资料</span>
+              </h3>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                {[
+                  { k: "所属行业", v: company.industry || "—" },
+                  { k: "总股本", v: company.total_shares != null ? `${(company.total_shares / 1e8).toFixed(2)} 亿股` : "—" },
+                  { k: "流通股", v: company.float_shares != null ? `${(company.float_shares / 1e8).toFixed(2)} 亿股` : "—" },
+                  { k: "流通市值", v: company.float_mcap != null ? `${(company.float_mcap / 1e8).toFixed(2)} 亿` : "—" },
+                  { k: "上市日期", v: company.list_date || "—" },
+                ].map((m) => (
+                  <div key={m.k} className="rounded-lg bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">{m.k}</p>
+                    <p className="mt-0.5 font-mono text-sm font-bold">{m.v}</p>
+                  </div>
+                ))}
+              </div>
+            </GlassCard>
+          )}
+
           {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
 
@@ -447,62 +536,83 @@ export function StockData() {
 
           {reports.length > 0 && (
             <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报（{reports.length}）</h3>
+              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" /> 近期研报（本页 {reports.length}）</h3>
               <div className="space-y-2">
-                {reports.slice(0, 12).map((r, i) => (
+                {reports.map((r, i) => (
                   <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
                     <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{(r.publishDate || "").slice(0, 10)}</span>
                     <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{r.orgSName}</span>
-                    {r.pdfUrl ? (
-                      <a href={r.pdfUrl} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{r.title}</a>
-                    ) : (
-                      <span className="flex-1 truncate">{r.title}</span>
+                    <span className="w-14 shrink-0">
+                      {r.emRatingName
+                        ? <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{r.emRatingName}</span>
+                        : <span className="text-[10px] text-muted-foreground/40">—</span>}
+                    </span>
+                    <span className="flex-1 truncate" title={r.title}>{r.title}</span>
+                    {r.pdfUrl && (
+                      <a href={r.pdfUrl} target="_blank" rel="noreferrer" title="下载研报 PDF"
+                        className="inline-flex shrink-0 items-center gap-0.5 rounded border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-primary/50 hover:text-primary">
+                        <Download className="h-3 w-3" /> PDF
+                      </a>
                     )}
-                    {r.emRatingName && <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{r.emRatingName}</span>}
                   </div>
                 ))}
               </div>
+              <Pager page={reportsPage} totalPages={reportsTotalPages} loading={pageLoading === "reports"}
+                onPrev={() => gotoReports(reportsPage - 1)} onNext={() => gotoReports(reportsPage + 1)} />
             </GlassCard>
           )}
 
           {anns.length > 0 && (
             <GlassCard className="mb-4">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 近期公告（{anns.length}）</h3>
+              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 巨潮公告（本页 {anns.length}）</h3>
               <div className="space-y-2">
-                {anns.slice(0, 12).map((a, i) => (
+                {anns.map((a, i) => (
                   <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
                     <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">{a.date}</span>
                     {a.type && <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{a.type}</span>}
                     {a.url ? (
-                      <a href={a.url} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{a.title.replace(/^[^:：]*[:：]/, "")}</a>
+                      <a href={a.url} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary" title={a.title}>{a.title.replace(/^[^:：]*[:：]/, "")}</a>
                     ) : (
-                      <span className="flex-1 truncate">{a.title}</span>
+                      <span className="flex-1 truncate" title={a.title}>{a.title}</span>
+                    )}
+                    {a.pdf_url && (
+                      <a href={a.pdf_url} target="_blank" rel="noreferrer" title="下载 PDF"
+                        className="inline-flex shrink-0 items-center gap-0.5 rounded border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-primary/50 hover:text-primary">
+                        <Download className="h-3 w-3" /> PDF
+                      </a>
                     )}
                   </div>
                 ))}
               </div>
+              <Pager page={annsPage} totalPages={annsTotalPages} loading={pageLoading === "anns"}
+                onPrev={() => gotoAnns(annsPage - 1)} onNext={() => gotoAnns(annsPage + 1)} />
             </GlassCard>
           )}
 
           <GlassCard>
-            <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Newspaper className="h-4 w-4 text-primary" /> 个股新闻</h3>
+            <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Newspaper className="h-4 w-4 text-primary" /> 个股新闻（本页 {news.length}）</h3>
             {depNote ? (
               <p className="text-xs text-warning">{depNote}（安装后新闻/公告即可用）</p>
             ) : news.length === 0 ? (
               <p className="text-xs text-muted-foreground/60">暂无新闻</p>
             ) : (
-              <div className="space-y-2">
-                {news.slice(0, 10).map((n, i) => (
+              <>
+                <div className="space-y-2">
+                  {news.map((n, i) => (
                   <div key={i} className="flex items-center gap-3 border-b border-border/40 pb-2 text-sm last:border-0">
                     <span className="w-28 shrink-0 font-mono text-xs text-muted-foreground">{(n.发布时间 || "").slice(0, 16)}</span>
+                    {n.文章来源 && <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{n.文章来源}</span>}
                     {n.新闻链接 ? (
-                      <a href={n.新闻链接} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary">{n.新闻标题}</a>
+                      <a href={n.新闻链接} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-primary" title={n.新闻内容 || n.新闻标题}>{n.新闻标题}</a>
                     ) : (
-                      <span className="flex-1 truncate">{n.新闻标题}</span>
+                      <span className="flex-1 truncate" title={n.新闻内容 || n.新闻标题}>{n.新闻标题}</span>
                     )}
                   </div>
                 ))}
-              </div>
+                </div>
+                <Pager page={newsPage} totalPages={newsTotalPages} loading={pageLoading === "news"}
+                  onPrev={() => gotoNews(newsPage - 1)} onNext={() => gotoNews(newsPage + 1)} />
+              </>
             )}
           </GlassCard>
 

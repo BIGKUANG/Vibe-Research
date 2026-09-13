@@ -158,29 +158,56 @@ def _report_session():
     return s
 
 
-def eastmoney_reports(code: str, max_pages: int = 3) -> list[dict]:
-    """按个股代码拉研报列表（qType=0）。"""
+def eastmoney_reports(code: str, max_pages: int = 3, page: int | None = None,
+                      page_size: int = 100) -> dict:
+    """按个股代码拉研报列表（东财 reportapi，qType=0），返回分页信封。
+
+    返回 {items, page, page_size, total, total_pages}（total=命中总数 hits，total_pages=TotalPage）。
+    - 传 page：只拉该单页（每页 page_size），用于页面分页；
+    - 默认：从第 1 页起连续拉 max_pages 页（每页 100），items 为聚合结果——供 AI 工具等使用。
+    """
     session = _report_session()
-    out: list[dict] = []
-    for page in range(1, max_pages + 1):
+
+    def _fetch(pno: int, psize: int) -> dict:
         params = {
-            "industryCode": "*", "pageSize": "100", "industry": "*",
+            "industryCode": "*", "pageSize": str(psize), "industry": "*",
             "rating": "*", "ratingChange": "*",
             "beginTime": "2000-01-01", "endTime": "2030-01-01",
-            "pageNo": str(page), "fields": "", "qType": "0",
+            "pageNo": str(pno), "fields": "", "qType": "0",
             "orgCode": "", "code": code, "rcode": "",
-            "p": str(page), "pageNum": str(page), "pageNumber": str(page),
+            "p": str(pno), "pageNum": str(pno), "pageNumber": str(pno),
         }
-        r = session.get(_REPORT_API, params=params, timeout=30)
-        d = r.json()
+        return session.get(_REPORT_API, params=params, timeout=30).json()
+
+    def _env(items: list, pno: int, psize: int, d: dict) -> dict:
+        try:
+            total = int(d.get("hits") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        try:
+            tpages = int(d.get("TotalPage") or 0)
+        except (TypeError, ValueError):
+            tpages = 0
+        return {"items": items, "page": pno, "page_size": psize, "total": total, "total_pages": tpages}
+
+    if page is not None:
+        pno, psize = max(1, page), max(1, page_size)
+        d = _fetch(pno, psize)
+        return _env(d.get("data") or [], pno, psize, d)
+
+    out: list[dict] = []
+    last = {}
+    for pno in range(1, max_pages + 1):
+        d = _fetch(pno, 100)
+        last = d
         rows = d.get("data") or []
         if not rows:
             break
         out.extend(rows)
-        if page >= (d.get("TotalPage", 1) or 1):
+        if pno >= (d.get("TotalPage", 1) or 1):
             break
         time.sleep(0.3)
-    return out
+    return _env(out, 1, len(out) or 100, last)
 
 
 def eastmoney_industry_reports(keywords: list[str] | None = None, days: int = 90, max_pages: int = 3) -> list[dict]:
@@ -233,28 +260,178 @@ def profit_forecast(code: str) -> list[dict]:
     return df.to_dict("records") if df is not None and not df.empty else []
 
 
-def stock_news(code: str, limit: int = 20) -> list[dict]:
-    """个股新闻（东财）。"""
-    ak = _akshare()
-    df = ak.stock_news_em(symbol=code)
-    return df.head(limit).to_dict("records") if df is not None and not df.empty else []
+def stock_news(code: str, limit: int = 20, page: int = 1) -> dict:
+    """个股新闻（东财 search-api-web JSONP，移植自 a-stock-data §5.1）。
+
+    返回分页信封 {items, page, page_size, total, total_pages}，items 每项
+    {关键词, 新闻标题, 新闻内容, 发布时间, 文章来源, 新闻链接}（键名与 akshare
+    stock_news_em 一致）。page 用于翻更早的新闻。
+    ⚠️ 不走 ak.stock_news_em：它对部分代码（如 600848）会抛
+    ArrowInvalid('invalid escape sequence: \\u') 导致新闻恒为空。
+    """
+    pno, psize = max(1, page), max(1, limit)
+    url = "https://search-api-web.eastmoney.com/search/jsonp"
+    inner = json.dumps({
+        "uid": "", "keyword": code, "type": ["cmsArticleWebOld"],
+        "client": "web", "clientType": "web", "clientVersion": "curr",
+        "param": {"cmsArticleWebOld": {
+            "searchScope": "default", "sort": "default",
+            "pageIndex": pno, "pageSize": psize, "preTag": "", "postTag": "",
+        }},
+    }, separators=(",", ":"))
+    try:
+        r = em_get(url, params={"cb": "jQuery_news", "param": inner},
+                   headers={"User-Agent": UA, "Referer": "https://so.eastmoney.com/"}, timeout=15)
+        text = r.text
+        payload = json.loads(text[text.index("(") + 1: text.rindex(")")])
+    except Exception:
+        return {"items": [], "page": pno, "page_size": psize, "total": 0, "total_pages": 0}
+    # 东财实际返回里 result.cmsArticleWebOld 直接是文章列表（并非 {list: [...]} 嵌套）
+    articles = (payload.get("result") or {}).get("cmsArticleWebOld") or []
+    out = []
+    for a in articles[:psize]:
+        out.append({
+            "关键词": code,
+            "新闻标题": re.sub(r"<[^>]+>", "", a.get("title", "") or ""),
+            "新闻内容": re.sub(r"<[^>]+>", "", a.get("content", "") or "")[:200],
+            "发布时间": a.get("date", ""),
+            "文章来源": a.get("mediaName", ""),
+            "新闻链接": a.get("url", ""),
+        })
+    try:
+        total = int(payload.get("hitsTotal") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    return {"items": out, "page": pno, "page_size": psize, "total": total,
+            "total_pages": (total + psize - 1) // psize if total else 0}
 
 
 def individual_info(code: str) -> dict:
-    """个股基本面（东财）：行业 / 总股本 / 上市时间等。"""
-    ak = _akshare()
-    df = ak.stock_individual_info_em(symbol=code)
-    if df is None or df.empty:
+    """公司基本档案（东财 push2 直连，移植自 a-stock-data §6.3）。
+
+    返回 {code, name, industry, total_shares(股), float_shares(股),
+    mcap(元), float_mcap(元), list_date(YYYY-MM-DD), price}。
+    ⚠️ 不用 akshare stock_individual_info_em：它内部用裸 requests，会走系统代理导致
+    ProxyError/502；这里统一走 em_get（直连优先、失败降级代理）。
+    """
+    market_code = 1 if code.startswith("6") else 0
+    params = {
+        "fltt": "2", "invt": "2",
+        "fields": "f57,f58,f84,f85,f127,f116,f117,f189,f43",
+        "secid": f"{market_code}.{code}",
+    }
+    # push2(实时) 不可达时降级 push2delay(延迟行情)，与 market_turnover_rank 同策略
+    d: dict = {}
+    for host in ("push2.eastmoney.com", "push2delay.eastmoney.com"):
+        try:
+            d = em_get(f"https://{host}/api/qt/stock/get",
+                       params=params, headers={"User-Agent": UA}, timeout=10).json().get("data") or {}
+            if d:
+                break
+        except Exception:
+            continue
+    if not d:
         return {}
-    return {str(row["item"]): row["value"] for _, row in df.iterrows()}
+
+    def _f(v):
+        return v if isinstance(v, (int, float)) else None
+
+    raw_date = str(d.get("f189") or "")
+    list_date = (f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
+                 if len(raw_date) == 8 and raw_date.isdigit() else "")
+    return {
+        "code": str(d.get("f57") or code),
+        "name": d.get("f58", "") or "",
+        "industry": d.get("f127", "") or "",
+        "total_shares": _f(d.get("f84")),   # 总股本(股)
+        "float_shares": _f(d.get("f85")),   # 流通股(股)
+        "mcap": _f(d.get("f116")),          # 总市值(元)
+        "float_mcap": _f(d.get("f117")),    # 流通市值(元)
+        "list_date": list_date,             # 上市日期 YYYY-MM-DD
+        "price": _f(d.get("f43")),
+    }
 
 
-def disclosure(code: str) -> list[dict]:
-    """巨潮公告全文列表（akshare cninfo，本环境不稳，保留作备用）。"""
-    ak = _akshare()
-    market = "沪市" if code.startswith("6") else ("北交所" if code.startswith("8") else "深市")
-    df = ak.stock_zh_a_disclosure_report_cninfo(symbol=code, market=market)
-    return df.head(30).to_dict("records") if df is not None and not df.empty else []
+_CNINFO_ORGID_MAP: dict[str, str] = {}
+
+
+def _cninfo_orgid(code: str) -> str:
+    """巨潮 股票代码 → 真实 orgId（移植自 a-stock-data §7.1，模块级缓存）。
+
+    巨潮 orgId 并非统一格式（如 600848→gssh0600848、601318→9900002221），硬编码
+    `gssx0{code}` 会让大量股票（尤其 601xxx 段）返回 0 条公告；故优先查官方映射表，
+    查不到再回退老格式。
+    """
+    global _CNINFO_ORGID_MAP
+    if not _CNINFO_ORGID_MAP:
+        import requests
+        try:
+            r = requests.get("http://www.cninfo.com.cn/new/data/szse_stock.json",
+                             headers={"User-Agent": UA}, timeout=15)
+            _CNINFO_ORGID_MAP = {s["code"]: s["orgId"] for s in r.json().get("stockList", [])}
+        except Exception:
+            _CNINFO_ORGID_MAP = {}
+    org = _CNINFO_ORGID_MAP.get(code)
+    if org:
+        return org
+    if code.startswith("6"):
+        return f"gssh0{code}"
+    if code.startswith(("8", "4")):
+        return f"gsbj0{code}"
+    return f"gssz0{code}"
+
+
+def disclosure(code: str, limit: int = 15, page: int = 1) -> dict:
+    """巨潮公告（直连 cninfo.com.cn 官方全文检索，移植自 a-stock-data §7.1）。
+
+    返回分页信封 {items, page, page_size, total, total_pages}，items 每项
+    {date, title, type, url, pdf_url}（pdf_url 为公告 PDF 直链，可下载；url 为巨潮详情页）。
+    page 用于翻更早的公告。
+    ⚠️ 不用 akshare stock_zh_a_disclosure_report_cninfo（本环境不稳）。
+    """
+    import requests
+
+    pno, psize = max(1, page), max(1, limit)
+    payload = {
+        "stock": f"{code},{_cninfo_orgid(code)}",
+        "tabName": "fulltext", "pageSize": str(psize), "pageNum": str(pno),
+        "column": "", "category": "", "plate": "", "seDate": "",
+        "searchkey": "", "secid": "", "sortName": "", "sortType": "", "isHLtitle": "true",
+    }
+    try:
+        r = requests.post(
+            "https://www.cninfo.com.cn/new/hisAnnouncement/query", data=payload,
+            headers={"User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded",
+                     "Referer": "https://www.cninfo.com.cn/new/disclosure",
+                     "Origin": "https://www.cninfo.com.cn"}, timeout=15)
+        d = r.json()
+        items = d.get("announcements") or []
+    except Exception:
+        return {"items": [], "page": pno, "page_size": psize, "total": 0, "total_pages": 0}
+    out = []
+    for a in items:
+        ts = a.get("announcementTime")
+        date = (datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+                if isinstance(ts, (int, float)) else str(ts or "")[:10])
+        adj = a.get("adjunctUrl") or ""
+        aid = a.get("announcementId") or ""
+        out.append({
+            "date": date,
+            "title": a.get("announcementTitle", "") or "",
+            "type": a.get("announcementTypeName") or "",
+            "url": f"https://www.cninfo.com.cn/new/disclosure/detail?annoId={aid}" if aid else "",
+            "pdf_url": f"https://static.cninfo.com.cn/{adj}" if adj else "",
+        })
+    try:
+        total = int(d.get("totalAnnouncement") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    try:
+        tpages = int(d.get("totalpages") or 0)
+    except (TypeError, ValueError):
+        tpages = 0
+    return {"items": out, "page": pno, "page_size": psize, "total": total,
+            "total_pages": tpages or ((total + psize - 1) // psize if total else 0)}
 
 
 def announcements(code: str, limit: int = 15) -> list[dict]:
