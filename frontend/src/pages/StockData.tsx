@@ -22,6 +22,8 @@ import { KLineChart } from "@/components/stock/KLineChart";
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
+// 市值（元）→ 万亿 / 亿
+const money = (v: number) => (v >= 1e12 ? `${(v / 1e12).toFixed(2)} 万亿` : `${(v / 1e8).toFixed(2)} 亿`);
 
 // 研报 / 公告 / 新闻 分页每页条数
 const PAGE_SIZE = 15;
@@ -459,19 +461,22 @@ export function StockData() {
             />
           )}
 
-          {/* 公司基本档案（行业 / 总股本 / 流通股 / 流通市值 / 上市日期）——K线之下、财报速览之上 */}
+          {/* 公司基本档案（行业/板块/股本/市值/52周/上市日期）——K线之下、财报速览之上 */}
           {company && (company.industry || company.total_shares != null) && (
             <GlassCard className="mb-4">
               <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
                 <Building2 className="h-4 w-4 text-primary" /> 公司基本档案
                 <span className="text-xs font-normal text-muted-foreground/60">东财 · 静态资料</span>
               </h3>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {[
                   { k: "所属行业", v: company.industry || "—" },
+                  { k: "所属板块", v: company.board || "—" },
+                  { k: "总市值", v: company.mcap != null ? money(company.mcap) : "—" },
                   { k: "总股本", v: company.total_shares != null ? `${(company.total_shares / 1e8).toFixed(2)} 亿股` : "—" },
                   { k: "流通股", v: company.float_shares != null ? `${(company.float_shares / 1e8).toFixed(2)} 亿股` : "—" },
-                  { k: "流通市值", v: company.float_mcap != null ? `${(company.float_mcap / 1e8).toFixed(2)} 亿` : "—" },
+                  { k: "52周最高", v: company.week52_high != null ? `${company.week52_high.toFixed(2)}` : "—" },
+                  { k: "52周最低", v: company.week52_low != null ? `${company.week52_low.toFixed(2)}` : "—" },
                   { k: "上市日期", v: company.list_date || "—" },
                 ].map((m) => (
                   <div key={m.k} className="rounded-lg bg-muted/30 p-3">

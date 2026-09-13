@@ -143,9 +143,10 @@ export interface Paged<T> {
 
 // 公司基本档案（东财 push2 直连，§6.3）
 export interface CompanyInfo {
-  code: string; name: string; industry: string;
+  code: string; name: string; industry: string; board?: string;
   total_shares: number | null; float_shares: number | null;
   mcap: number | null; float_mcap: number | null;
+  week52_high?: number | null; week52_low?: number | null;
   list_date: string; price: number | null;
 }
 

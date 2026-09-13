@@ -79,8 +79,9 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
             "turnover_pct": num(38),
             "pe_ttm": num(39),
             "amplitude_pct": num(43),
-            "mcap_yi": num(44),
-            "float_mcap_yi": num(45),
+            # 腾讯 qt.gtimg 字段 44=流通市值、45=总市值（此前标反，导致「总市值」实为流通市值）
+            "mcap_yi": num(45),
+            "float_mcap_yi": num(44),
             "pb": num(46),
             "limit_up": num(47),
             "limit_down": num(48),
@@ -317,7 +318,7 @@ def individual_info(code: str) -> dict:
     market_code = 1 if code.startswith("6") else 0
     params = {
         "fltt": "2", "invt": "2",
-        "fields": "f57,f58,f84,f85,f127,f116,f117,f189,f43",
+        "fields": "f57,f58,f84,f85,f116,f117,f127,f128,f189,f174,f175,f43",
         "secid": f"{market_code}.{code}",
     }
     # push2(实时) 不可达时降级 push2delay(延迟行情)，与 market_turnover_rank 同策略
@@ -342,12 +343,15 @@ def individual_info(code: str) -> dict:
     return {
         "code": str(d.get("f57") or code),
         "name": d.get("f58", "") or "",
-        "industry": d.get("f127", "") or "",
-        "total_shares": _f(d.get("f84")),   # 总股本(股)
-        "float_shares": _f(d.get("f85")),   # 流通股(股)
-        "mcap": _f(d.get("f116")),          # 总市值(元)
-        "float_mcap": _f(d.get("f117")),    # 流通市值(元)
-        "list_date": list_date,             # 上市日期 YYYY-MM-DD
+        "industry": d.get("f127", "") or "",   # 所属行业
+        "board": d.get("f128", "") or "",      # 所属板块（如「上海板块」）
+        "total_shares": _f(d.get("f84")),      # 总股本(股)
+        "float_shares": _f(d.get("f85")),      # 流通股(股)
+        "mcap": _f(d.get("f116")),             # 总市值(元)
+        "float_mcap": _f(d.get("f117")),       # 流通市值(元)
+        "week52_high": _f(d.get("f174")),      # 52周最高
+        "week52_low": _f(d.get("f175")),       # 52周最低
+        "list_date": list_date,                # 上市日期 YYYY-MM-DD
         "price": _f(d.get("f43")),
     }
 
