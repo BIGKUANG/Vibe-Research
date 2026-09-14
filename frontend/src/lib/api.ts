@@ -97,6 +97,9 @@ export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
   pe_ttm: number; pb: number; mcap_yi: number; turnover_pct: number;
   limit_up: number; limit_down: number;
+  // 腾讯 88 字段快照里的其余已标定字段（后端 /api/quote 已返回，前端可选展示）
+  vol_ratio?: number; amplitude_pct?: number; amount_wan?: number;
+  float_mcap_yi?: number; security_type?: string; is_stale?: boolean; ts?: string;
 }
 
 export interface Valuation {
@@ -247,6 +250,14 @@ export interface QaRow { company: string; question: string; answer: string | nul
 export interface IndustryRow { rank: number; name: string; change_pct: number; code: string; up_count: number; down_count: number }
 export interface IndustryData { top: IndustryRow[]; bottom: IndustryRow[]; total: number }
 
+// 股票筛选：全市场快照（列式 fields + rows，减小体积）+ ROE 按需增强
+export interface ScreenerSnapshot {
+  as_of: string; count: number; stale?: boolean;
+  fields: string[];
+  rows: (string | number | boolean | null)[][];
+}
+export type ScreenerRoe = Record<string, { roe: number | null }>;
+
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
@@ -323,6 +334,9 @@ export const api = {
   watchlistGet: () => get<string[]>("/watchlist"),
   watchlistSet: (codes: string[]) => request<{ ok: boolean }>("/watchlist", "POST", codes),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
+  screenerSnapshot: () => get<ScreenerSnapshot>("/screener/snapshot"),
+  screenerEnrich: (codes: string[], groups = "roe") =>
+    get<ScreenerRoe>(`/screener/enrich?codes=${encodeURIComponent(codes.join(","))}&groups=${groups}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>
     request<MyReport>("/myreports", "POST", { name, content_b64: contentB64 }),

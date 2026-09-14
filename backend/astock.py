@@ -11,14 +11,17 @@
 
 from __future__ import annotations
 
+import csv
 import math
 import json
 import os
 import random
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -26,11 +29,16 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
 def get_prefix(code: str) -> str:
-    """6 位代码 → 交易所前缀。5 开头是沪市基金/ETF（51/56/58 等），深市基金 15/16 开头走默认 sz。"""
+    """6 位代码 → 交易所前缀。
+
+    ⚠️ 顺序敏感：北交所 920 新号段以 "92" 开头，必须先于 "9x → sh" 判断，
+    否则 920xxx 会被当成沪市、取到空数据（见 a-stock-data SKILL §1.2）。
+    北交所老号段 4/8（43/83/87）同样归 bj；5 开头是沪市基金/ETF；深市走默认 sz。
+    """
+    if code.startswith(("92", "4", "8")):
+        return "bj"
     if code.startswith(("6", "9", "5")):
         return "sh"
-    if code.startswith("8"):
-        return "bj"
     return "sz"
 
 
@@ -87,7 +95,17 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
             "limit_down": num(48),
             "vol_ratio": num(49),
             "pe_static": num(52),
+            # 字段 30=行情时间戳 YYYYMMDDHHMMSS（用于判断报价新鲜度）。
+            "ts": vals[30] if len(vals) > 30 else "",
+            # 字段 61=证券类型（GP-A / GP-A-CYB / GP-A-KCB / GP(北交所) / ZS 指数 / ETF），
+            # 筛选页据此剔除 ETF/指数/可转债。
+            "security_type": vals[61] if len(vals) > 61 else "",
         }
+        # 僵尸报价：退市/长期停牌股腾讯仍返回定格价（成交量为 0、现价==昨收）。
+        q = result[code]
+        q["is_stale"] = bool(
+            q["amount_wan"] == 0 and q["price"] > 0 and q["price"] == q["last_close"]
+        )
     return result
 
 
@@ -95,6 +113,80 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
     """批量个股实时行情：现价 / 涨跌 / PE / PB / 市值 / 换手 / 涨跌停。"""
     prefixed = [f"{get_prefix(c)}{c}" for c in codes]
     return _parse_gtimg(_fetch_gtimg(prefixed))
+
+
+# 腾讯单 URL 拼码上限（实测 ≤800 可用；2000 会被拒）。全市场用 500/块最稳。
+_TENCENT_BATCH = 500
+_TENCENT_WORKERS = 4
+
+
+def tencent_quote_batch(
+    codes: list[str], batch: int = _TENCENT_BATCH, workers: int = _TENCENT_WORKERS
+) -> dict[str, dict]:
+    """全市场批量实时行情：分块 500 + 受控并发拉取腾讯（不封 IP）。
+
+    单块失败不影响其余块（该块标的在结果里缺失，由调用方按「未获取」处理）。
+    返回 {code: 行情}，键为 6 位代码。
+    """
+    if not codes:
+        return {}
+    chunks = [codes[i : i + batch] for i in range(0, len(codes), batch)]
+    result: dict[str, dict] = {}
+    if len(chunks) == 1:
+        return _parse_gtimg(_fetch_gtimg([f"{get_prefix(c)}{c}" for c in chunks[0]]))
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(chunks)))) as pool:
+        futures = {
+            pool.submit(_fetch_gtimg, [f"{get_prefix(c)}{c}" for c in ch]): ch
+            for ch in chunks
+        }
+        for fut in as_completed(futures):
+            try:
+                result.update(_parse_gtimg(fut.result()))
+            except Exception:  # noqa: BLE001 — 单块失败降级，不拖垮整批
+                continue
+    return result
+
+
+# 筛选页宇宙：本地静态表（代码/名称/行业/地区/板块/上市日），零网络、启动后常驻内存。
+# 与前端 frontend/src/data/stock_codes.csv 同源。
+_A_SHARE_MARKETS = {"主板", "中小板", "创业板", "科创板", "北交所"}
+_UNIVERSE_PATH = (
+    Path(__file__).resolve().parent.parent / "frontend" / "src" / "data" / "stock_codes.csv"
+)
+_universe_cache: list[dict] | None = None
+
+
+def a_share_universe() -> list[dict]:
+    """全市场 A 股基础表（沪深京，剔除港股/美股）。
+
+    返回 [{code, name, industry, area, board, list_date}]，模块级缓存（进程内只读一次）。
+    文件缺失/异常时返回 []，由调用方报错，不伪造数据。
+    """
+    global _universe_cache
+    if _universe_cache is not None:
+        return _universe_cache
+    rows: list[dict] = []
+    try:
+        with _UNIVERSE_PATH.open(encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                board = (r.get("market") or "").strip()
+                code = (r.get("code") or "").strip()
+                if board not in _A_SHARE_MARKETS:
+                    continue
+                if not code.isdigit() or len(code) != 6:
+                    continue
+                rows.append({
+                    "code": code,
+                    "name": (r.get("name") or "").strip(),
+                    "industry": (r.get("industry") or "").strip(),
+                    "area": (r.get("area") or "").strip(),
+                    "board": board,
+                    "list_date": (r.get("list_date") or "").strip(),
+                })
+    except Exception:  # noqa: BLE001 — 读不到就当空，调用方据此报错
+        rows = []
+    _universe_cache = rows
+    return rows
 
 
 # 腾讯日K线（后复权），不走 mootdx/akshare 等外部依赖
@@ -465,11 +557,141 @@ def announcements(code: str, limit: int = 15) -> list[dict]:
 # ---------------------------------------------------------------------------
 # mootdx 惰性封装（K线 / 财务 / F10）
 # ---------------------------------------------------------------------------
+# mootdx 0.11.x 全新安装后 BESTIP.HQ 为空串，裸 Quotes.factory(market='std')
+# 会抛 `ValueError: not enough values to unpack`。移植 a-stock-data SKILL 的 tdx_client()：
+# 显式 server 绕过 BESTIP，并做 TCP 探测 + 真实取数验活。解析成功的 server 进程内缓存，
+# 后续直接复用（不再逐次探测）。每个调用新建 client，避免多线程共享 socket。
+_TDX_SERVERS = [
+    ("119.97.185.59", 7709), ("124.70.133.119", 7709), ("116.205.183.150", 7709),
+    ("123.60.73.44", 7709), ("116.205.163.254", 7709), ("121.36.225.169", 7709),
+    ("123.60.70.228", 7709), ("124.71.9.153", 7709), ("110.41.147.114", 7709),
+    ("124.71.187.122", 7709),
+]
+_tdx_server: tuple[str, int] | None = None   # 已验证可用的 server
+_tdx_use_default = False                      # 全部候选不可用时，回退裸 factory 可用
+_tdx_fail_at = 0.0                            # 上次解析失败时间（熔断，避免每请求都等满超时）
+_TDX_FAIL_COOLDOWN = 300.0
+_TDX_RESOLVE_TIMEOUT = 4.0
+_tdx_resolve_lock = threading.Lock()          # 同一时刻只允许一个线程解析 server
+
+
+def _tdx_validate(client, market: str = "std") -> bool:
+    """真实取数验活：坏 server 可握手通过却回空 body（静默空表），用一次 K 线请求兜底。"""
+    if market != "std":
+        return True
+    try:
+        df = client.bars(symbol="000001", frequency=9, offset=1)
+        return df is not None and not df.empty
+    except Exception:
+        return False
+
+
+def _bounded(fn, timeout: float):
+    """在守护线程里执行 fn，最多等 timeout 秒；超时返回 _TIMEOUT。
+
+    用于 mootdx：其 socket 读取无超时，某些网络下连接建立成功但取数永久阻塞。
+    守护线程不会阻塞进程退出。
+    """
+    box: dict = {}
+
+    def _run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # noqa: BLE001 — 原样带回给调用方
+            box["error"] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return _TIMEOUT
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+_TIMEOUT = object()
+
+
+def _resolve_server(Quotes, candidates: list[tuple[str, int]], timeout: float):
+    """并行尝试候选 server，返回第一个验活成功的 (ip, port, client)；全部失败返回 None。
+
+    尝试跑在守护线程里，整体最多等 timeout 秒（坏网络下连接建立但取数阻塞，故必须限时）。
+    """
+    found: list[tuple[str, int, object]] = []
+    lock = threading.Lock()
+    done = threading.Event()
+
+    def _attempt(ip: str, port: int) -> None:
+        if done.is_set():
+            return
+        try:
+            client = Quotes.factory(market="std", server=(ip, port))
+            if _tdx_validate(client):
+                with lock:
+                    if not found:
+                        found.append((ip, port, client))
+                done.set()
+        except Exception:
+            pass
+
+    threads = [threading.Thread(target=_attempt, args=(ip, port), daemon=True) for ip, port in candidates]
+    for t in threads:
+        t.start()
+    done.wait(timeout)
+    return found[0] if found else None
+
+
+def _tdx_new_client():
+    """创建 mootdx std 客户端，规避 BESTIP 空串 bug + 坏服务器静默空表。
+
+    - 同一时刻只允许一个线程解析（其余线程最多等 5s，随后按失败处理），
+      避免坏网络下每只股票都重跑一遍解析；
+    - 并行尝试显式 server，取第一个验活成功的并缓存；
+    - 都不可达时试 bestip / 裸 factory（各限时）；
+    - 整体失败进入 5 分钟熔断（海外网络 TCP 7709 常不可达）。
+    """
+    from mootdx.quotes import Quotes
+
+    global _tdx_server, _tdx_use_default, _tdx_fail_at
+    if _tdx_server is not None:
+        return Quotes.factory(market="std", server=_tdx_server)
+    if _tdx_use_default:
+        return Quotes.factory(market="std")
+    if time.time() - _tdx_fail_at < _TDX_FAIL_COOLDOWN:
+        raise RuntimeError("mootdx 服务器暂不可用（冷却中，请稍后重试）")
+
+    if not _tdx_resolve_lock.acquire(timeout=5.0):
+        raise RuntimeError("mootdx 服务器解析中，请稍后重试")
+    try:
+        if _tdx_server is not None:
+            return Quotes.factory(market="std", server=_tdx_server)
+        if _tdx_use_default:
+            return Quotes.factory(market="std")
+        if time.time() - _tdx_fail_at < _TDX_FAIL_COOLDOWN:
+            raise RuntimeError("mootdx 服务器暂不可用（冷却中，请稍后重试）")
+
+        hit = _resolve_server(Quotes, _TDX_SERVERS, timeout=_TDX_RESOLVE_TIMEOUT)
+        if hit is not None:
+            ip, port, client = hit
+            _tdx_server = (ip, port)
+            return client
+
+        for kwargs in ({"bestip": True},):
+            client = _bounded(lambda kw=kwargs: Quotes.factory(market="std", **kw), timeout=3.0)
+            if client is not _TIMEOUT and _bounded(lambda c=client: _tdx_validate(c), timeout=2.0) is True:
+                _tdx_use_default = True
+                return client
+
+        _tdx_fail_at = time.time()
+        raise RuntimeError("所有 mootdx 服务器均无法取到数据（TCP 7709 不可达或被 reset）")
+    finally:
+        _tdx_resolve_lock.release()
+
 
 def _mootdx_client():
     try:
-        from mootdx.quotes import Quotes
-        return Quotes.factory(market="std")
+        return _tdx_new_client()
     except ImportError as e:
         raise DependencyMissing("mootdx 未安装：pip install mootdx") from e
 
@@ -500,6 +722,35 @@ def finance(code: str) -> dict:
     if df is None or (hasattr(df, "empty") and df.empty):
         return {}
     return df.to_dict("records")[0] if hasattr(df, "to_dict") else dict(df)
+
+
+# ROE 单只缓存：季报口径变化慢，缓存 12 小时足够；避免筛选页反复拉取同一批股票。
+_ROE_CACHE: dict[str, tuple[float, float | None]] = {}
+_ROE_TTL = 12 * 3600
+
+
+def screener_roe(code: str) -> float | None:
+    """单只 ROE（mootdx finance 37 字段之一）。
+
+    带 12h 进程内缓存；取不到返回 None（不伪造、不用旧值冒充）。
+    依赖缺失时抛 DependencyMissing、数据源不可用时抛 RuntimeError，由接口层分类处理；
+    单只取数超时则记 None（避免拖垮整批）。
+    """
+    hit = _ROE_CACHE.get(code)
+    now = time.time()
+    if hit and now - hit[0] < _ROE_TTL:
+        return hit[1]
+    fin = _bounded(lambda: finance(code), timeout=10.0)
+    if fin is _TIMEOUT:
+        _ROE_CACHE[code] = (now, None)
+        return None
+    roe = fin.get("roe")
+    try:
+        roe = float(roe) if roe is not None and str(roe).strip() != "" else None
+    except (TypeError, ValueError):
+        roe = None
+    _ROE_CACHE[code] = (now, roe)
+    return roe
 
 
 # ---------------------------------------------------------------------------

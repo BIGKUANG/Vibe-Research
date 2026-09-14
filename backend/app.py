@@ -15,10 +15,13 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -53,6 +56,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# 全市场筛选快照体积较大（数千行），启用 GZip 压缩（约 1.5MB → 300~400KB）。
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
@@ -752,3 +758,150 @@ def industry(top: int = Query(20, ge=5, le=50)):
         return {"data": data}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"行业排名异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 股票筛选：全市场快照（腾讯批量，本地宇宙）+ ROE 按需增强（mootdx）
+# 合规：只返回客观行情/估值/行业数据，不含任何评级、评分或买卖建议。
+# ---------------------------------------------------------------------------
+
+# 列式响应：fields + rows（行内按 fields 顺序排列），比对象数组更省体积、前端解码一次即可。
+_SCREENER_FIELDS = [
+    "code", "name", "price", "change_pct", "turnover_pct", "vol_ratio", "amplitude_pct",
+    "pe_ttm", "pb", "mcap_yi", "float_mcap_yi", "amount_wan",
+    "limit_up", "limit_down", "security_type", "is_stale",
+    "industry", "area", "board", "list_date",
+]
+
+# 快照缓存：TTL 内直接命中；过期走 stale-while-revalidate（先回旧、后台刷新）。
+_SCREENER_TTL = 60.0
+_SCREENER_ENRICH_MAX = 50
+_screener_cache: dict = {"payload": None, "at": 0.0}
+_screener_lock = threading.Lock()
+_screener_refreshing = False
+
+
+def _build_screener_payload() -> dict:
+    """拉全市场 A 股行情+估值，与本地基础表 join，返回列式快照。"""
+    universe = astock.a_share_universe()
+    if not universe:
+        raise RuntimeError("本地股票表缺失（frontend/src/data/stock_codes.csv）")
+    codes = [u["code"] for u in universe]
+    quotes = astock.tencent_quote_batch(codes)
+    meta = {u["code"]: u for u in universe}
+    # 以本批最新行情日期为基准：只有报价日期落后于全市场最新日期的才是真·停牌/废码，
+    # 避免把「盘前/收盘后 成交额为 0 且现价==昨收」的正常个股误判为僵尸报价。
+    fresh_date = max((q.get("ts", "")[:8] for q in quotes.values() if q.get("ts")), default="")
+    rows: list[list] = []
+    for code in codes:
+        q = quotes.get(code)
+        if not q:
+            continue  # 取不到就不列入（不填假值）
+        st = (q.get("security_type") or "").strip()
+        # 腾讯证券类型：GP-A 主板 / GP-A-CYB 创业板 / GP-A-KCB 科创板 / GP 北交所。
+        # 非 GP（ETF/指数/其它）剔除；类型为空时保留（本地表已是 A 股）。
+        if st and not st.startswith("GP"):
+            continue
+        m = meta[code]
+        stale = bool(q["is_stale"] and fresh_date and q.get("ts", "")[:8] != fresh_date)
+        rows.append([
+            code, q["name"] or m["name"], q["price"], q["change_pct"], q["turnover_pct"],
+            q["vol_ratio"], q["amplitude_pct"], q["pe_ttm"], q["pb"],
+            q["mcap_yi"], q["float_mcap_yi"], q["amount_wan"],
+            q["limit_up"], q["limit_down"], st, stale,
+            m["industry"], m["area"], m["board"], m["list_date"],
+        ])
+    return {
+        "as_of": _time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "count": len(rows),
+        "fields": _SCREENER_FIELDS,
+        "rows": rows,
+    }
+
+
+def _store_screener(payload: dict) -> None:
+    with _screener_lock:
+        _screener_cache["payload"] = payload
+        _screener_cache["at"] = _time.time()
+
+
+def _spawn_screener_refresh() -> None:
+    """后台刷新快照（同一时刻只允许一个刷新在跑）。"""
+    global _screener_refreshing
+    with _screener_lock:
+        if _screener_refreshing:
+            return
+        _screener_refreshing = True
+
+    def _run() -> None:
+        global _screener_refreshing
+        try:
+            _store_screener(_build_screener_payload())
+        except Exception:  # noqa: BLE001 — 后台刷新失败保留旧数据
+            pass
+        finally:
+            with _screener_lock:
+                _screener_refreshing = False
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+@app.get("/api/screener/snapshot")
+def screener_snapshot():
+    """全市场 A 股实时快照（列式）。命中缓存 <50ms；冷启动约 2s；过期先回旧再后台刷新。"""
+    with _screener_lock:
+        payload = _screener_cache["payload"]
+        at = _screener_cache["at"]
+    if payload is not None:
+        if _time.time() - at < _SCREENER_TTL:
+            return {"data": payload}
+        _spawn_screener_refresh()
+        return {"data": {**payload, "stale": True}}
+    try:
+        payload = _build_screener_payload()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"全市场快照构建失败：{e}") from e
+    _store_screener(payload)
+    return {"data": payload}
+
+
+@app.get("/api/screener/enrich")
+def screener_enrich(codes: str = Query(...), groups: str = Query("roe")):
+    """按需增强（本期仅 ROE）：对当前结果集（≤50 只）批量取 ROE，4 路并发、12h 缓存。"""
+    lst = [c.strip() for c in codes.split(",") if c.strip()]
+    lst = [c for c in lst if c.isdigit() and len(c) == 6]
+    if not lst:
+        raise HTTPException(400, "codes 必须含至少一个 6 位代码")
+    if groups != "roe":
+        raise HTTPException(400, "本期仅支持 groups=roe")
+    lst = list(dict.fromkeys(lst))[:_SCREENER_ENRICH_MAX]
+
+    def _one(code: str) -> tuple[str, float | None]:
+        return code, astock.screener_roe(code)
+
+    out: dict[str, dict] = {}
+    errors = 0
+    dep_error: Exception | None = None
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(_one, c): c for c in lst}
+            for fut in as_completed(futures):
+                code = futures[fut]
+                try:
+                    _, roe = fut.result(timeout=15)
+                    out[code] = {"roe": roe}
+                except astock.DependencyMissing as e:
+                    dep_error = e
+                    out[code] = {"roe": None}
+                    errors += 1
+                except Exception:  # noqa: BLE001 — 单只失败不拖垮整批
+                    out[code] = {"roe": None}
+                    errors += 1
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"ROE 增强异常：{e}") from e
+
+    if errors == len(lst):
+        if dep_error is not None:
+            raise HTTPException(501, f"ROE 需要 mootdx 依赖：{dep_error}") from dep_error
+        raise HTTPException(502, "ROE 数据源暂不可用（mootdx 取数失败）")
+    return {"data": out}

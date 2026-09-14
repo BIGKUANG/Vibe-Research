@@ -10,6 +10,7 @@ import { Debate } from "@/pages/Debate";
 import { Portfolio } from "@/pages/Portfolio";
 import { StockData } from "@/pages/StockData";
 import { Watchlist } from "@/pages/Watchlist";
+import { Screener } from "@/pages/Screener";
 import { MyReports } from "@/pages/MyReports";
 import { Notes } from "@/pages/Notes";
 import { Settings } from "@/pages/Settings";
@@ -28,6 +29,7 @@ export const router = createBrowserRouter([
       { path: "/stock-data", element: <StockData /> },
       { path: "/debate", element: <Debate /> },
       { path: "/watchlist", element: <Watchlist /> },
+      { path: "/screener", element: <Screener /> },
       { path: "/my-reports", element: <MyReports /> },
       { path: "/notes", element: <Notes /> },
       { path: "/settings", element: <Settings /> },

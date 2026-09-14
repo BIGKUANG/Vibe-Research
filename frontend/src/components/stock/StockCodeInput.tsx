@@ -8,9 +8,28 @@ interface Props {
   onChange: (v: string) => void;
   onSearch: (code?: string) => void;
   loading: boolean;
+  /** 占位文案，默认按个股页（A股/美股/港股/韩股）。 */
+  placeholder?: string;
+  /** 主按钮文案，默认「查询」；自选页传「添加」即可复用同一组件。 */
+  actionLabel?: string;
+  /** 输入框宽度等附加样式，默认 `w-80`。 */
+  inputClassName?: string;
+  /** 下拉建议宽度，默认 `w-96`；输入框拉满时传 `w-full`。 */
+  dropdownClassName?: string;
 }
 
-export function StockCodeInput({ value, onChange, onSearch, loading }: Props) {
+const DEFAULT_PLACEHOLDER = "A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）";
+
+export function StockCodeInput({
+  value,
+  onChange,
+  onSearch,
+  loading,
+  placeholder = DEFAULT_PLACEHOLDER,
+  actionLabel = "查询",
+  inputClassName = "w-80",
+  dropdownClassName = "w-96",
+}: Props) {
   const [focused, setFocused] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,8 +128,11 @@ export function StockCodeInput({ value, onChange, onSearch, loading }: Props) {
           onFocus={() => setFocused(true)}
           onBlur={closeDropdown}
           onKeyDown={handleKeyDown}
-          placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
-          className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+          placeholder={placeholder}
+          className={cn(
+            "rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50",
+            inputClassName,
+          )}
         />
         <button
           onClick={() => {
@@ -125,13 +147,13 @@ export function StockCodeInput({ value, onChange, onSearch, loading }: Props) {
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          查询
+          {actionLabel}
         </button>
       </div>
 
       {/* 下拉建议列表 */}
       {showDropdown && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-96 rounded-lg border border-border bg-card p-1 shadow-xl">
+        <div className={cn("absolute left-0 top-full z-50 mt-1 rounded-lg border border-border bg-card p-1 shadow-xl", dropdownClassName)}>
           {suggestions.map((s, i) => (
             <button
               key={s.code}

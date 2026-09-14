@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   FileText, Newspaper, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare, Download,
@@ -129,6 +130,7 @@ function Pager({ page, totalPages, loading, onPrev, onNext }: {
 }
 
 export function StockData() {
+  const [searchParams] = useSearchParams();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -264,6 +266,19 @@ export function StockData() {
       if (rid === runIdRef.current) setLoading(false);
     }
   };
+
+  // 支持从其它页面跳转带 ?code=xxx 进入时自动查询该个股（如「股票筛选」点「查看」）。
+  // 依赖参数值：首次进入或 URL 上的 code 变化时触发；同一代码不重复触发。
+  const paramCode = (searchParams.get("code") || "").trim();
+  const lastParamRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!paramCode || lastParamRef.current === paramCode) return;
+    lastParamRef.current = paramCode;
+    setCode(paramCode);
+    void run(paramCode);
+    // run 为组件内闭包，按参数触发即可，无需列入依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramCode]);
 
   const metrics = val ? [
     { k: "现价", v: fmt(val.price) },

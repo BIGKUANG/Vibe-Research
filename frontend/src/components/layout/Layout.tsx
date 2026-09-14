@@ -4,6 +4,7 @@ import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText, Swords,
+  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -26,6 +27,7 @@ const NAV = [
   { to: "/stock-data", icon: Search, label: "个股数据" },
   { to: "/debate", icon: Swords, label: "多空辩论" },
   { to: "/watchlist", icon: Star, label: "自选股" },
+  { to: "/screener", icon: SlidersHorizontal, label: "股票筛选" },
   { to: "/portfolio", icon: Wallet, label: "我的持仓" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
   { to: "/notes", icon: NotebookPen, label: "研究记录" },
@@ -171,7 +173,7 @@ export function Layout() {
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-6xl px-6 py-6">
+        <div className={cn("mx-auto px-6 py-6", pathname === "/screener" ? "max-w-[1600px]" : "max-w-6xl")}>
           <Outlet />
         </div>
       </main>

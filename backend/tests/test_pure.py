@@ -10,6 +10,8 @@ def test_get_prefix():
     assert astock.get_prefix("000001") == "sz"
     assert astock.get_prefix("300750") == "sz"
     assert astock.get_prefix("832000") == "bj"   # 8 开头北交所
+    assert astock.get_prefix("430047") == "bj"   # 4 开头北交所老号段
+    assert astock.get_prefix("920982") == "bj"   # 920 新号段必须先于 9x→sh 判断
     assert astock.get_prefix("510300") == "sh"   # 沪 ETF（issue #10：曾误判 sz → 行情为 0）
     assert astock.get_prefix("588000") == "sh"   # 科创 50 ETF
     assert astock.get_prefix("159915") == "sz"   # 深 ETF 15 开头走默认 sz
@@ -29,13 +31,18 @@ def test_pe_digestion():
 
 
 def _gtimg_line(**overrides) -> str:
-    # 构造一条腾讯行情返回行：v_sh600519="1~名~代码~价~..."（≥53 字段）。
-    parts = ["0"] * 55
+    # 构造一条腾讯行情返回行：v_sh600519="1~名~代码~价~..."（≥62 字段）。
+    # 注意：44=流通市值、45=总市值（曾标反），61=证券类型。
+    parts = ["0"] * 63
     parts[1] = overrides.get("name", "贵州茅台")
     parts[3] = overrides.get("price", "1194.45")
+    parts[4] = overrides.get("last_close", "1200.00")
+    parts[37] = overrides.get("amount_wan", "50000")
     parts[39] = overrides.get("pe_ttm", "18.05")
-    parts[44] = overrides.get("mcap", "15000")
+    parts[44] = overrides.get("float_mcap", "9000")
+    parts[45] = overrides.get("mcap", "15000")
     parts[46] = overrides.get("pb", "6.41")
+    parts[61] = overrides.get("security_type", "GP-A")
     return 'v_sh600519="' + "~".join(parts) + '";'
 
 
@@ -47,7 +54,16 @@ def test_parse_gtimg():
     assert q["price"] == 1194.45
     assert q["pe_ttm"] == 18.05
     assert q["pb"] == 6.41
-    assert q["mcap_yi"] == 15000
+    assert q["mcap_yi"] == 15000        # 总市值 = 字段 45
+    assert q["float_mcap_yi"] == 9000   # 流通市值 = 字段 44
+    assert q["security_type"] == "GP-A"
+    assert q["is_stale"] is False
+
+
+def test_parse_gtimg_stale():
+    # 成交量为 0 且现价==昨收（>0）→ 僵尸报价，筛选页据此剔除停牌/废码。
+    q = astock._parse_gtimg(_gtimg_line(price="10.00", last_close="10.00", amount_wan="0"))["600519"]
+    assert q["is_stale"] is True
 
 
 def test_parse_gtimg_bad_line_ignored():
