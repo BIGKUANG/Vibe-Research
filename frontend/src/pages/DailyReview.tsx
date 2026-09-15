@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, Plus, X, Flame, BarChart3, Globe } from "lucide-react";
+import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, X, Flame, BarChart3, Globe } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { Disclaimer } from "@/components/ui/Disclaimer";
+import { StockCodeInput } from "@/components/stock/StockCodeInput";
 import { api, ApiError, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type ThsHot, type TurnoverTop, type GlobalIndex } from "@/lib/api";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
@@ -45,15 +46,28 @@ export function DailyReview() {
   const [refreshing, setRefreshing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
-  const loadIndices = () => {
+  // 刷新关注股票行情；返回 Promise，便于「更新全部」统一等待
+  const refreshWatch = (codes: string[]) => {
+    if (!codes.length) { setWatchQuotes({}); return Promise.resolve(); }
+    return api.quote(codes.join(",")).then(setWatchQuotes).catch(() => {});
+  };
+
+  // 「更新」= 刷新本页**所有**数据：6 个市场数据块 + 关注股票（列表重新读取 + 行情）。
+  // 说明：AI 当日复盘是 LLM 生成内容（非数据），不自动重跑，避免每次刷新都消耗模型额度。
+  const refreshAll = () => {
     setRefreshing(true);
-    Promise.all([
+    setIdxErr(false);
+    // 复位「已结束」标记：刷新期间各块重新显示「加载中…」而不是「暂无数据」
+    setOvDone(false); setEmoDone(false); setToDone(false); setThsDone(false);
+    return Promise.all([
       api.indices().then(setIndices).catch(() => setIdxErr(true)),
       api.globalIndices().then(setGlobalIdx).catch(() => {}),
       api.marketOverview().then(setOverview).catch(() => {}).finally(() => setOvDone(true)),
       api.emotion().then(setEmotion).catch(() => {}).finally(() => setEmoDone(true)),
       api.turnoverTop().then(setTurnover).catch(() => {}).finally(() => setToDone(true)),
       api.thsHot().then(setThsHot).catch(() => {}).finally(() => setThsDone(true)),
+      // 关注股票：可能在别的页面增删过 → 重新读列表，再刷行情
+      loadWatch().then((cs) => { setWatchCodes(cs); return refreshWatch(cs); }).catch(() => {}),
     ]).finally(() => {
       setRefreshing(false);
       setUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
@@ -67,19 +81,17 @@ export function DailyReview() {
     </p>
   );
 
-  const refreshWatch = (codes: string[]) => {
-    if (!codes.length) { setWatchQuotes({}); return; }
-    api.quote(codes.join(",")).then(setWatchQuotes).catch(() => {});
-  };
-
+  // 首次进入即拉取全部数据（与「更新」按钮同一入口，保证二者行为一致）
   useEffect(() => {
-    loadIndices();
-    loadWatch().then((cs) => { setWatchCodes(cs); refreshWatch(cs); });
+    void refreshAll();
+    // 仅挂载时执行一次：refreshAll 每帧重建，依赖它会变成死循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const addWatch = () => {
-    // 支持一次粘贴多只（逗号 / 空格分隔）；全部无效或重复则清空输入、无副作用。
-    const { next, added } = addCodes(watchCodes, watchInput);
+  // 与「自选股」页共用 StockCodeInput：输入代码或名称模糊搜索，选中/回车后回调 6 位代码，
+  // 再复用 lib/watchlist.addCodes 去重入库（同一套解析 + 去重逻辑）。
+  const addWatch = (code?: string) => {
+    const { next, added } = addCodes(watchCodes, (code ?? watchInput).trim());
     setWatchInput("");
     if (!added) return;
     setWatchCodes(next); saveWatch(next); refreshWatch(next);
@@ -140,9 +152,9 @@ export function DailyReview() {
           <div className="flex items-center gap-2">
             {updatedAt && <span className="text-[11px] text-muted-foreground/60">更新于 {updatedAt}</span>}
             <button
-              onClick={() => { loadIndices(); refreshWatch(watchCodes); }}
+              onClick={() => { void refreshAll(); }}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
-              title="更新该页面所有数据"
+              title="更新该页面所有数据（大盘 / 全球 / 关注股票 / 情绪 / 热榜 / 成交额 / 板块资金）"
             >
               {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
               更新
@@ -202,19 +214,20 @@ export function DailyReview() {
       <div className="mb-3 flex items-center gap-2">
         <h3 className="text-sm font-semibold text-muted-foreground">关注股票</h3>
       </div>
-      <GlassCard className="mb-6">
-        <div className="mb-3 flex gap-2">
-          <input
+      {/* relative z-30：.glass 的 backdrop-filter 会形成层叠上下文，卡片不抬高的话，
+          输入框下拉建议的 z-50 只在本卡内生效，会被下方后渲染的玻璃卡（AI 复盘/市场情绪…）盖住。 */}
+      <GlassCard className="relative z-30 mb-6">
+        <div className="mb-3">
+          <StockCodeInput
             value={watchInput}
-            onChange={(e) => setWatchInput(e.target.value.replace(/[^\d,\s]/g, "").slice(0, 80))}
-            onKeyDown={(e) => e.key === "Enter" && addWatch()}
-            placeholder="加自选：可批量，如 600519 000858"
-            className="w-60 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+            onChange={setWatchInput}
+            onSearch={addWatch}
+            loading={false}
+            placeholder="输入代码或名称（如 600519 / 贵州茅台）"
+            actionLabel="增加"
+            inputClassName="flex-1 min-w-0"
+            dropdownClassName="w-full"
           />
-          <button onClick={addWatch}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
-            <Plus className="h-4 w-4" /> 增加
-          </button>
         </div>
         {watchCodes.length === 0 ? (
           <p className="text-sm text-muted-foreground/60">加上你关注的股票，随时看它们的实时价格与涨跌。数据存本地，不上传。</p>

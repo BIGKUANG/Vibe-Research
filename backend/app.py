@@ -15,9 +15,12 @@ import hmac
 import json
 import os
 import secrets
+import subprocess
+import sys
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +49,59 @@ app = FastAPI(title="Vibe-Research API", version=__version__)
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
+
+# ── 启动时更新前端股票代码表（stock_codes.csv + .ts） ────────────────────────
+# 放在 startup（而非 run.sh）：无论用 run.sh 还是手动 uvicorn 启动都会执行；
+# 同步执行可保证后端 a_share_universe() 读到的是更新后的 CSV（该函数进程内只读一次）。
+# tushare 的 token / url 由脚本自己从项目根 .env 读取；失败/超时只告警，不影响服务。
+_UPDATE_STOCKS_SCRIPT = Path(__file__).resolve().parent.parent / "frontend" / "src" / "data" / "update_stocks.py"
+
+
+def _maybe_update_stock_codes() -> None:
+    """启动钩子：按 VR_UPDATE_STOCKS 策略更新代码表（默认每天一次）。"""
+    mode = os.environ.get("VR_UPDATE_STOCKS", "daily").strip().lower()
+    if mode in ("", "off", "0", "false"):
+        return
+    # 测试环境不联网（pytest / TestClient 都会触发 startup）
+    if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    if not _UPDATE_STOCKS_SCRIPT.exists():
+        print(f"[stock-codes] 未找到更新脚本：{_UPDATE_STOCKS_SCRIPT}", flush=True)
+        return
+
+    root = _UPDATE_STOCKS_SCRIPT.parents[3]  # frontend/src/data → 仓库根
+    log_path = root / "logs" / "update_stocks.log"
+    stamp = root / "logs" / ".stock_codes_updated"
+    today = _time.strftime("%Y-%m-%d")
+    if mode != "always" and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == today:
+        return  # 当天已成功更新过，跳过（默认策略）
+
+    try:
+        timeout = float(os.environ.get("VR_UPDATE_STOCKS_TIMEOUT", "60"))
+    except ValueError:
+        timeout = 60.0
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(_UPDATE_STOCKS_SCRIPT)],
+            cwd=str(_UPDATE_STOCKS_SCRIPT.parent),
+            capture_output=True, text=True, timeout=timeout,
+        )
+        log_path.write_text((proc.stdout or "") + (proc.stderr or ""), encoding="utf-8")
+        if proc.returncode == 0:
+            stamp.write_text(today + "\n", encoding="utf-8")
+            lines = (proc.stdout or "").strip().splitlines()
+            print(f"[stock-codes] 已更新：{lines[-1] if lines else 'ok'}", flush=True)
+        else:
+            print(f"[stock-codes] 更新失败（沿用现有 CSV/TS），详见 {log_path}", flush=True)
+    except subprocess.TimeoutExpired:
+        print(f"[stock-codes] 更新超时（>{timeout:.0f}s，沿用现有 CSV/TS）", flush=True)
+    except Exception as e:  # noqa: BLE001 — 更新异常一律不影响服务启动
+        print(f"[stock-codes] 更新异常（沿用现有 CSV/TS）：{type(e).__name__}: {e}", flush=True)
+
+
+# 注册为 startup 事件处理器（FastAPI 0.139 已移除 app.add_event_handler，走 starlette router）
+app.router.add_event_handler("startup", _maybe_update_stock_codes)
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
