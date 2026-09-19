@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, X, Flame, BarChart3, Globe } from "lucide-react";
+import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, X, Flame, BarChart3, Globe, ChevronDown } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -26,6 +26,8 @@ export function DailyReview() {
   const [review, setReview] = useState("");
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewErr, setReviewErr] = useState<string | null>(null);
+  // 复盘卡折叠态（默认展开）。点标题行或右侧箭头切换；点「让 AI 复盘今天」一律先展开。
+  const [reviewCollapsed, setReviewCollapsed] = useState(false);
   const [needConfig, setNeedConfig] = useState(false);
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [emotion, setEmotion] = useState<ShortTermEmotion | null>(null);
@@ -111,6 +113,8 @@ export function DailyReview() {
   const runReview = async () => {
     setReviewErr(null);
     setNeedConfig(false);
+    // 点复盘即展开：无论之前是否收起，生成过程与结果都直接可见。
+    setReviewCollapsed(false);
     if (!hasLlm()) { setNeedConfig(true); return; }
     setReviewLoading(true);
     setReview("");
@@ -210,12 +214,93 @@ export function DailyReview() {
         </>
       )}
 
+      {/* 1c. AI 当日复盘（紧随大盘/全球市场，先给结论再给明细；可折叠，点复盘默认展开） */}
+      <GlassCard glow className="mb-6">
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setReviewCollapsed((v) => !v)}
+            aria-expanded={!reviewCollapsed}
+            title={reviewCollapsed ? "展开复盘" : "收起复盘"}
+            className="flex min-w-0 items-center gap-1.5 font-semibold"
+          >
+            <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+            <span className="truncate">AI 当日复盘</span>
+            <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", reviewCollapsed && "-rotate-90")} />
+          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {reviewCollapsed && review && <span className="hidden text-[11px] text-muted-foreground/60 sm:inline">复盘已收起</span>}
+            <button onClick={runReview} disabled={reviewLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+              {reviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {review ? "重新复盘" : "让 AI 复盘今天"}
+            </button>
+          </div>
+        </div>
+        {!reviewCollapsed && (
+          <>
+            {needConfig && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-muted-foreground">
+                <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+                还没接入 AI。<Link to="/settings" className="text-primary">先去接入你的 AI</Link>，之后一键出复盘。
+              </div>
+            )}
+            {reviewErr && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" /> {reviewErr}
+              </div>
+            )}
+            {review ? (
+              <>
+                <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{review}</ReactMarkdown></div>
+                {!reviewLoading && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${today}`} content={review} /></div>}
+              </>
+            ) : !needConfig && !reviewErr && !reviewLoading ? (
+              <p className="mt-3 text-sm text-muted-foreground">点上方按钮，系统把当天客观数据打包给你的 AI，由它生成复盘。<b className="text-foreground">分析是它给的，我们只负责喂数据。</b></p>
+            ) : null}
+          </>
+        )}
+      </GlassCard>
+
+      {/* 1d. 市场情绪（紧随 AI 复盘，先看当日盘面强度再看个股与榜单） */}
+      <div className="mb-3 flex items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Gauge className="h-4 w-4" /> 市场情绪</h3>
+      </div>
+      <GlassCard className="mb-6">
+        {!sentiment?.breadth ? (
+          pending(ovDone)
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                { k: "大盘宽度", v: sentiment.breadth, hint: "冰点 / 偏弱 / 中性 / 偏强 / 普涨" },
+                { k: "题材投机", v: sentiment.speculation, hint: "冰点 / 普通 / 活跃 / 亢奋" },
+              ].map((m) => (
+                <div key={m.k} className="rounded-lg bg-muted/25 p-4">
+                  <p className="text-xs text-muted-foreground">{m.k}</p>
+                  <p className="mt-1 text-2xl font-bold text-primary">{m.v}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground/60">{m.hint}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              {sentCells.map((c) => (
+                <div key={c.k} className="rounded-lg bg-muted/20 p-2 text-center">
+                  <p className="truncate text-[11px] text-muted-foreground">{c.k}</p>
+                  <p className={cn("mt-0.5 font-mono text-sm font-bold", c.up === null ? "text-foreground" : c.up ? "text-danger" : "text-success")}>{c.v}</p>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </GlassCard>
+
       {/* 2. 关注股票（自选） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="text-sm font-semibold text-muted-foreground">关注股票</h3>
       </div>
       {/* relative z-30：.glass 的 backdrop-filter 会形成层叠上下文，卡片不抬高的话，
-          输入框下拉建议的 z-50 只在本卡内生效，会被下方后渲染的玻璃卡（AI 复盘/市场情绪…）盖住。 */}
+          输入框下拉建议的 z-50 只在本卡内生效，会被下方后渲染的玻璃卡（短线情绪/热榜…）盖住。 */}
       <GlassCard className="relative z-30 mb-6">
         <div className="mb-3">
           <StockCodeInput
@@ -253,71 +338,7 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 3. AI 当日复盘 */}
-      <GlassCard glow className="mb-6">
-        <div className="flex items-center justify-between">
-          <h3 className="flex items-center gap-1.5 font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
-          <button onClick={runReview} disabled={reviewLoading}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-            {reviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {review ? "重新复盘" : "让 AI 复盘今天"}
-          </button>
-        </div>
-        {needConfig && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-muted-foreground">
-            <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
-            还没接入 AI。<Link to="/settings" className="text-primary">先去接入你的 AI</Link>，之后一键出复盘。
-          </div>
-        )}
-        {reviewErr && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" /> {reviewErr}
-          </div>
-        )}
-        {review ? (
-          <>
-            <div className="prose prose-sm dark:prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{review}</ReactMarkdown></div>
-            {!reviewLoading && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${today}`} content={review} /></div>}
-          </>
-        ) : !needConfig && !reviewErr && !reviewLoading ? (
-          <p className="mt-3 text-sm text-muted-foreground">点上方按钮，系统把当天客观数据打包给你的 AI，由它生成复盘。<b className="text-foreground">分析是它给的，我们只负责喂数据。</b></p>
-        ) : null}
-      </GlassCard>
-
-      {/* 4. 市场情绪 */}
-      <div className="mb-3 flex items-center gap-2">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Gauge className="h-4 w-4" /> 市场情绪</h3>
-      </div>
-      <GlassCard className="mb-6">
-        {!sentiment?.breadth ? (
-          pending(ovDone)
-        ) : (
-          <>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {[
-                { k: "大盘宽度", v: sentiment.breadth, hint: "冰点 / 偏弱 / 中性 / 偏强 / 普涨" },
-                { k: "题材投机", v: sentiment.speculation, hint: "冰点 / 普通 / 活跃 / 亢奋" },
-              ].map((m) => (
-                <div key={m.k} className="rounded-lg bg-muted/25 p-4">
-                  <p className="text-xs text-muted-foreground">{m.k}</p>
-                  <p className="mt-1 text-2xl font-bold text-primary">{m.v}</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground/60">{m.hint}</p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 grid grid-cols-4 gap-2">
-              {sentCells.map((c) => (
-                <div key={c.k} className="rounded-lg bg-muted/20 p-2 text-center">
-                  <p className="truncate text-[11px] text-muted-foreground">{c.k}</p>
-                  <p className={cn("mt-0.5 font-mono text-sm font-bold", c.up === null ? "text-foreground" : c.up ? "text-danger" : "text-success")}>{c.v}</p>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </GlassCard>
-
-      {/* 4b. 短线情绪（连板梯队 / 打板情绪，聚合口径零个股名） */}
+      {/* 3. 短线情绪（连板梯队 / 打板情绪，聚合口径零个股名） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
         <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪 · 客观公开榜单</span>
@@ -393,7 +414,7 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 4b2. 同花顺热榜（客观公开榜单，独立子窗口） */}
+      {/* 3b. 同花顺热榜（客观公开榜单，独立子窗口） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 同花顺热榜</h3>
         <span className="text-[11px] text-muted-foreground/50">人气飙升 · 默认展示 20 条 · 客观公开榜单，非推荐 / 非预测</span>
@@ -453,7 +474,7 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 4c. 全市场成交额 TOP20（客观公开榜单） */}
+      {/* 3c. 全市场成交额 TOP20（客观公开榜单） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><BarChart3 className="h-4 w-4" /> 全市场成交额 TOP20</h3>
         <span className="text-[11px] text-muted-foreground/50">客观公开榜单，非推荐 / 非预测 / 不构成投资建议</span>
@@ -491,7 +512,7 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 5. 板块资金趋势榜（行业） */}
+      {/* 4. 板块资金趋势榜（行业） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><TrendingUp className="h-4 w-4" /> 板块资金趋势榜</h3>
         <span className="text-[11px] text-muted-foreground/50">行业 · 按今日净流入排序</span>
@@ -526,7 +547,7 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 6. 资金轮动 */}
+      {/* 5. 资金轮动 */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><ArrowDownUp className="h-4 w-4" /> 资金轮动</h3>
         <span className="text-[11px] text-muted-foreground/50">板块级净流入 / 流出</span>
