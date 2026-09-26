@@ -1,7 +1,12 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "instructions": [".kilo/skills/vibe-research/SKILL.md"],
+  "instructions": [
+    ".kilo/skills/vibe-research/SKILL.md",
+    ".kilo/ui-page-design.md"
+  ],
   "skills": {
-    "paths": [".kilo/skills"]
+    "paths": [
+      ".kilo/skills"
+    ]
   }
 }

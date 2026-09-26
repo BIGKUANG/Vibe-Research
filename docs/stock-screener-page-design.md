@@ -438,5 +438,5 @@ GET /api/screener/enrich?codes=600519,000858,...&groups=roe
 ## 附：与现有页面/文档的关系
 
 - `docs/full-market-snapshot.md`：本页 L1 数据的完整实现原型（腾讯批量 + 巨潮代码表 + 88 字段标定），可直接移植进 `astock.py`。
-- `docs/stock-data-page-enhancement-suggestions.md`：个股页（`/stock-data`）的增强建议；本页行内「查看个股」直接跳转过去，二者共享数据源，不重复造轮子。
+- `docs/stock-data-page-ui-design.md`：个股页（`/stock-data`）的 UI 布局与子功能说明；本页行内「查看个股」直接跳转过去，二者共享数据源，不重复造轮子。
 - 现有 `frontend/src/data/stock_codes.ts` / `stock_codes.csv`：本页 L0 宇宙与行业/地区分类来源。

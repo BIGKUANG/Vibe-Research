@@ -153,6 +153,18 @@ export interface CompanyInfo {
   list_date: string; price: number | null;
 }
 
+// 公司名片 + 简介 / 主营 / 经营范围（tushare stock_company，可选增强；无权限时为空）
+export interface CompanyProfile {
+  code: string;
+  com_name: string; com_id: string;
+  chairman: string; manager: string; secretary: string;
+  reg_capital_yi: number | null;
+  setup_date: string;
+  employees: number | null;
+  province: string; city: string; office: string; website: string; email: string;
+  introduction: string; main_business: string; business_scope: string;
+}
+
 export interface IndexQuote {
   name: string; price: number; change_pct: number; change_amt: number;
 }
@@ -315,6 +327,7 @@ export const api = {
   financials: (code: string) => get<Financials>(`/financials?code=${code}`),
   announcements: (code: string) => get<Announcement[]>(`/announcements?code=${code}`),
   info: (code: string) => get<CompanyInfo>(`/info?code=${code}`),
+  companyProfile: (code: string) => get<CompanyProfile>(`/company-profile?code=${code}`),
   disclosure: (code: string, limit = 15, page = 1) => get<Paged<Announcement>>(`/disclosure?code=${code}&limit=${limit}&page=${page}`),
   quote: (codes: string) => get<Record<string, Quote>>(`/quote?codes=${codes}`),
   reports: (code: string, page = 1, pageSize = 15) => get<Paged<Report>>(`/reports?code=${code}&page=${page}&page_size=${pageSize}`),

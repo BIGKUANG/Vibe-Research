@@ -326,7 +326,7 @@ export function DailyReview() {
                     className="absolute right-1.5 top-1.5 text-muted-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100">
                     <X className="h-3.5 w-3.5" />
                   </button>
-                  <p className="truncate text-xs text-muted-foreground">{q?.name || c}</p>
+                  <Link to={`/stock-data?code=${c}`} title="查看个股数据" className="block truncate text-xs text-muted-foreground hover:text-primary">{q?.name || c}</Link>
                   <p className={cn("mt-1 font-mono text-lg font-bold", q ? pctColor(q.change_pct) : "text-muted-foreground/40")}>{q ? q.price : "—"}</p>
                   <p className={cn("text-xs", q ? pctColor(q.change_pct) : "text-muted-foreground/40")}>
                     {q ? `${q.change_pct > 0 ? "+" : ""}${q.change_pct}%` : c}
@@ -396,7 +396,7 @@ export function DailyReview() {
                     <tbody>
                       {emotion.lianban_stocks.map((s) => (
                         <tr key={s.code} className="border-b border-border/30">
-                          <td className="px-2 py-2"><span className="font-medium">{s.name}</span> <span className="text-xs text-muted-foreground/50">{s.code}</span></td>
+                          <td className="px-2 py-2"><Link to={`/stock-data?code=${s.code}`} title="查看个股数据" className="font-medium hover:text-primary">{s.name}</Link> <span className="text-xs text-muted-foreground/50">{s.code}</span></td>
                           <td className="whitespace-nowrap px-2 py-2 font-mono font-bold text-primary">{s.boards} 板</td>
                           <td className="px-2 py-2 font-mono">{s.price}</td>
                           <td className="px-2 py-2 font-mono text-danger">+{s.pct}%</td>
@@ -443,7 +443,7 @@ export function DailyReview() {
                       {s.rank_chg < 0 && <span className="ml-1 text-[10px] text-success" title="排名下降">▼{-s.rank_chg}</span>}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2">
-                      <span className="font-medium" title={s.reason || undefined}>{s.name}</span>
+                      <Link to={`/stock-data?code=${s.code}`} className="font-medium hover:text-primary" title={s.reason || "查看个股数据"}>{s.name}</Link>
                       <span className="text-xs text-muted-foreground/50"> {s.code}</span>
                     </td>
                     <td className={cn("px-2 py-2 font-mono", pctColor(s.pct))}>{s.pct > 0 ? "+" : ""}{s.pct}%</td>
@@ -496,7 +496,7 @@ export function DailyReview() {
                 {turnover.stocks.map((s, i) => (
                   <tr key={s.code} className="border-b border-border/30">
                     <td className="px-2 py-2 font-mono text-xs text-muted-foreground/50">{i + 1}</td>
-                    <td className="px-2 py-2"><span className="font-medium">{s.name}</span> <span className="text-xs text-muted-foreground/50">{s.code}</span></td>
+                    <td className="px-2 py-2"><Link to={`/stock-data?code=${s.code}`} title="查看个股数据" className="font-medium hover:text-primary">{s.name}</Link> <span className="text-xs text-muted-foreground/50">{s.code}</span></td>
                     <td className="px-2 py-2 font-mono">{s.price ?? "—"}</td>
                     <td className={cn("px-2 py-2 font-mono", s.pct == null ? "text-muted-foreground" : pctColor(s.pct))}>
                       {s.pct == null ? "—" : `${s.pct > 0 ? "+" : ""}${s.pct}%`}

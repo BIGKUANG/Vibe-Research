@@ -646,6 +646,16 @@ def info(code: str = Query(...)):
         raise HTTPException(502, f"基本面源异常：{e}") from e
 
 
+@app.get("/api/company-profile")
+def company_profile(code: str = Query(...)):
+    """公司名片 + 简介 / 主营 / 经营范围（tushare stock_company，可选增强；无权限/未配置返回空）。"""
+    code = _validate(code)
+    try:
+        return {"data": astock.company_profile(code)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"公司介绍源异常：{e}") from e
+
+
 @app.get("/api/disclosure")
 def disclosure(code: str = Query(...), limit: int = Query(15, ge=1, le=50), page: int = Query(1, ge=1)):
     """巨潮公告列表（cninfo 官方全文检索，含 PDF 直链）。默认 15 条；page 用于翻更早公告。"""

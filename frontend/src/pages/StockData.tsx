@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   FileText, Newspaper, AlertCircle, LineChart, BarChart3, Megaphone,
@@ -14,7 +14,7 @@ import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
-  type GlobalStock, type HkCashflow, type CompanyInfo,
+  type GlobalStock, type HkCashflow, type CompanyInfo, type CompanyProfile,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StockCodeInput } from "@/components/stock/StockCodeInput";
@@ -129,6 +129,128 @@ function Pager({ page, totalPages, loading, onPrev, onNext }: {
   );
 }
 
+// 长文本折叠：默认按行数截断，超出才出现「展开 / 收起」，展开状态不持久化。
+function ExpandableText({ text, clampCls }: { text: string; clampCls: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLParagraphElement>(null);
+  const clampH = useRef(0);
+  const [overflow, setOverflow] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      // 收起态记录截断高度；展开后不再更新，保证「收起」按钮仍在
+      if (!open) clampH.current = el.clientHeight;
+      setOverflow(clampH.current > 0 && el.scrollHeight > clampH.current + 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, open]);
+
+  return (
+    <div>
+      <p ref={ref} className={cn("whitespace-pre-line text-sm leading-relaxed text-muted-foreground", !open && clampCls)}>
+        {text}
+      </p>
+      {overflow && (
+        <button type="button" onClick={() => setOpen((v) => !v)}
+          className="mt-1 text-[11px] text-primary transition-colors hover:underline">
+          {open ? "收起 ▴" : "展开 ▾"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// 数据块加载状态：loading 加载中 / ok 正常 / empty 无数据 / error 取数失败
+type LoadState = "loading" | "ok" | "empty" | "error";
+
+// 各数据块中文名（状态汇总与失败提示用）
+const BLOCK_LABELS: Record<string, string> = {
+  valuation: "估值快照", kline: "K线图", financials: "财务关键指标", percentile: "估值历史分位",
+  reports: "近期研报", disclosure: "巨潮公告", news: "个股新闻", margin: "融资融券",
+  holders: "股东户数", fundFlow: "主力资金流", dividend: "分红派息", blockTrade: "大宗交易",
+  dragonTiger: "龙虎榜", lockup: "限售解禁", blocks: "板块归属", hotConcepts: "热门概念",
+  investorQa: "投资者互动", info: "公司基本档案", profile: "公司介绍", globalStock: "港股/美股行情",
+};
+
+// 空数据判定：null / 空数组 / 空对象 视为「无数据」（≠ 失败）
+function isEmptyData(v: unknown): boolean {
+  if (v == null) return true;
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === "object") return Object.keys(v as Record<string, unknown>).length === 0;
+  return false;
+}
+
+// 数据块内联状态：失败 / 空 / 加载中，替代「静默不显示」
+function DataNote({ state, err, source }: { state?: LoadState; err?: string; source?: string }) {
+  if (state === "loading") return <p className="py-2 text-sm text-muted-foreground/60">加载中…</p>;
+  if (state === "error") {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>数据获取失败，无法展示{source ? `（来源：${source}）` : ""}{err ? ` · ${err}` : ""}</span>
+      </div>
+    );
+  }
+  return (
+    <p className="py-2 text-sm text-muted-foreground/70">
+      暂无数据{source ? `（来源：${source}）` : ""}，可能非交易时段或该股无此数据。
+    </p>
+  );
+}
+
+// 页面级数据状态条：一眼看到哪些块获取失败 / 无数据
+function BlockStatusBar({ states, errs, onRetry }: {
+  states: Record<string, LoadState>; errs: Record<string, string>; onRetry: () => void;
+}) {
+  const failed = Object.keys(states).filter((k) => states[k] === "error");
+  const empty = Object.keys(states).filter((k) => states[k] === "empty");
+  if (!failed.length && !empty.length) return null;
+  const name = (k: string) => BLOCK_LABELS[k] || k;
+  return (
+    <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm">
+      <div className="flex items-center gap-2">
+        <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+        <span className="font-medium text-warning">部分数据未获取到</span>
+        <button onClick={onRetry}
+          className="ml-auto rounded border border-border/60 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary">
+          重试
+        </button>
+      </div>
+      {failed.length > 0 && (
+        <p className="mt-2 text-destructive">
+          <span className="font-medium">获取失败</span>：{failed.map(name).join("、")}
+          {failed.some((k) => errs[k]) && (
+            <span className="text-muted-foreground/70">（{failed.filter((k) => errs[k]).map((k) => `${name(k)} ${errs[k]}`).join("；")}）</span>
+          )}
+        </p>
+      )}
+      {empty.length > 0 && (
+        <p className="mt-1 text-muted-foreground"><span className="font-medium">暂无数据</span>：{empty.map(name).join("、")}</p>
+      )}
+    </div>
+  );
+}
+
+// 取数失败时的区块占位卡：保留标题 + 明确的「获取失败」提示，替代静默隐藏
+function FailCard({ title, icon: Icon, source, err }: {
+  title: string; icon: ComponentType<{ className?: string }>; source?: string; err?: string;
+}) {
+  return (
+    <GlassCard className="mb-4">
+      <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
+        <Icon className="h-4 w-4 text-primary" /> {title}
+        {source && <span className="text-xs font-normal text-muted-foreground/60">{source}</span>}
+      </h3>
+      <DataNote state="error" err={err} source={source} />
+    </GlassCard>
+  );
+}
+
 export function StockData() {
   const [searchParams] = useSearchParams();
   const [code, setCode] = useState("");
@@ -156,7 +278,11 @@ export function StockData() {
   const [cashflow, setCashflow] = useState<HkCashflow | null>(null);  // 港股现金流量表（仅港股）
   const [klineData, setKlineData] = useState<Record<string, number>[] | null>(null);
   const [klineErr, setKlineErr] = useState<string | null>(null);
-  const [company, setCompany] = useState<CompanyInfo | null>(null);  // 公司基本档案
+  const [company, setCompany] = useState<CompanyInfo | null>(null);  // 公司基本档案（东财）
+  const [profile, setProfile] = useState<CompanyProfile | null>(null);  // 公司名片/简介（tushare，可选）
+  // 各数据块加载状态与错误信息（失败/空在 UI 出声，不静默隐藏）
+  const [blockState, setBlockState] = useState<Record<string, LoadState>>({});
+  const [blockErr, setBlockErr] = useState<Record<string, string>>({});
   // 研报 / 巨潮公告 / 新闻 分页（默认每页 PAGE_SIZE 条，可翻更早数据）
   const [reportsPage, setReportsPage] = useState(1);
   const [annsPage, setAnnsPage] = useState(1);
@@ -202,6 +328,8 @@ export function StockData() {
     setGStock(null); setCashflow(null);
     setKlineData(null); setKlineErr(null);
     setCompany(null);
+    setProfile(null);
+    setBlockState({}); setBlockErr({});
     // 分页复位（新查询从第 1 页开始）
     setReportsPage(1); setAnnsPage(1); setNewsPage(1);
     setReportsTotalPages(0); setAnnsTotalPages(0); setNewsTotalPages(0);
@@ -221,50 +349,69 @@ export function StockData() {
       return;
     }
 
-    // A 股：竞态守卫（快速换代码时只让最新一次回填）+ 资金面/筹码独立回填、不阻塞主数据
-    const ok = <T,>(set: (v: T) => void) => (v: T) => { if (rid === runIdRef.current) set(v); };
-    api.margin(c).then(ok(setMargin)).catch(() => {});
-    api.blockTrade(c).then(ok(setBlockT)).catch(() => {});
-    api.holders(c).then(ok(setHolders)).catch(() => {});
-    api.dividend(c).then(ok(setDividend)).catch(() => {});
-    api.fundFlow(c).then(ok(setFundFlow)).catch(() => {});
-    api.dragonTiger(c).then(ok(setDt)).catch(() => {});
-    api.lockup(c).then(ok(setLockup)).catch(() => {});
-    api.blocks(c).then(ok(setBlocks)).catch(() => {});
-    api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
-    api.investorQa(c).then(ok(setQa)).catch(() => {});
-    api.info(c).then(ok(setCompany)).catch(() => {});
-    api.kline(c, 4, 120).then(ok(setKlineData)).catch((e) => {
-      if (rid === runIdRef.current) setKlineErr(e instanceof ApiError ? e.message : null);
-    });
-    try {
-      // 行情+估值+研报+历史分位+财务+巨潮公告（含 PDF 下载；新闻单独降级）——均取第 1 页
-      const emptyPage = { items: [], page: 1, page_size: PAGE_SIZE, total: 0, total_pages: 0 };
-      const [v, r, p, f, a] = await Promise.all([
-        api.valuation(c),
-        api.reports(c, 1, PAGE_SIZE).catch(() => emptyPage),
-        api.percentile(c).catch(() => null),
-        api.financials(c).catch(() => null),
-        api.disclosure(c, PAGE_SIZE, 1).catch(() => emptyPage),
-      ]);
+    // A 股：每块独立跟踪加载状态（失败/空在 UI 出声），互不阻塞。
+    // 竞态守卫：快速换代码时只让最新一次回填；mark 内部同样带 rid 校验。
+    const errMsg = (e: unknown) =>
+      e instanceof ApiError ? `HTTP ${e.status} ${e.message}` :
+      (e instanceof Error && e.message ? e.message : "请求失败");
+    const mark = (key: string, s: LoadState, msg = "") => {
       if (rid !== runIdRef.current) return;
-      setVal(v);
-      setReports(r.items); setReportsTotalPages(r.total_pages);
-      setPctl(p);
-      setFin(f);
-      setAnns(a.items); setAnnsTotalPages(a.total_pages);
-      try {
-        const n = await api.news(c, PAGE_SIZE, 1);
-        if (rid === runIdRef.current) { setNews(n.items); setNewsTotalPages(n.total_pages); }
-      } catch (e) {
-        if (rid === runIdRef.current && e instanceof ApiError && e.status === 501) setDepNote(e.message);
-      }
-    } catch (e) {
+      setBlockState((m) => ({ ...m, [key]: s }));
+      setBlockErr((m) => (msg ? { ...m, [key]: msg } : m));
+    };
+    const track = <T,>(key: string, p: Promise<T>, apply: (v: T) => void, empty?: (v: T) => boolean) => {
+      mark(key, "loading");
+      return p.then((v) => {
+        if (rid !== runIdRef.current) return;
+        apply(v);
+        mark(key, (empty ? empty(v) : isEmptyData(v)) ? "empty" : "ok");
+      }).catch((e) => { mark(key, "error", errMsg(e)); });
+    };
+
+    // 行情 / 估值 / 财务 / 研报 / 公告 / 新闻（第 1 页）
+    const pValuation = track("valuation", api.valuation(c), setVal);
+    track("financials", api.financials(c), setFin, (v) => !v || (!v.revenue && !v.roe));
+    track("percentile", api.percentile(c), setPctl, (v) => !v);
+    track("reports", api.reports(c, 1, PAGE_SIZE),
+      (r) => { setReports(r.items); setReportsTotalPages(r.total_pages); }, (r) => r.items.length === 0);
+    track("disclosure", api.disclosure(c, PAGE_SIZE, 1),
+      (a) => { setAnns(a.items); setAnnsTotalPages(a.total_pages); }, (a) => a.items.length === 0);
+    track("news", api.news(c, PAGE_SIZE, 1),
+      (n) => { setNews(n.items); setNewsTotalPages(n.total_pages); }, (n) => n.items.length === 0);
+
+    // 资金面 / 筹码 / 龙虎榜 / 解禁 / 板块概念 / 互动易 / 公司档案
+    track("margin", api.margin(c), setMargin);
+    track("blockTrade", api.blockTrade(c), setBlockT);
+    track("holders", api.holders(c), setHolders);
+    track("dividend", api.dividend(c), setDividend);
+    track("fundFlow", api.fundFlow(c), setFundFlow);
+    track("dragonTiger", api.dragonTiger(c), setDt, (v) => !v || v.records.length === 0);
+    track("lockup", api.lockup(c), setLockup, (v) => !v || (v.upcoming.length === 0 && v.history.length === 0));
+    track("blocks", api.blocks(c), setBlocks, (v) => !v || v.concept_tags.length === 0);
+    track("hotConcepts", api.hotConcepts(c), setHotCon);
+    track("investorQa", api.investorQa(c), setQa);
+    track("info", api.info(c), setCompany);
+    track("profile", api.companyProfile(c), setProfile);
+
+    // K 线：失败时同时把错误传给图表组件
+    mark("kline", "loading");
+    api.kline(c, 4, 120).then((v) => {
+      if (rid !== runIdRef.current) return;
+      setKlineData(v); setKlineErr(null);
+      mark("kline", v.length ? "ok" : "empty");
+    }).catch((e) => {
+      if (rid !== runIdRef.current) return;
+      setKlineErr(e instanceof ApiError ? e.message : "K线获取失败");
+      mark("kline", "error", errMsg(e));
+    });
+
+    // 估值（核心）失败时页面级错误条仍提示；其余块独立出声
+    pValuation.catch((e) => {
       if (rid !== runIdRef.current) return;
       setErr(e instanceof ApiError ? e.message : "查询失败");
-    } finally {
+    }).finally(() => {
       if (rid === runIdRef.current) setLoading(false);
-    }
+    });
   };
 
   // 支持从其它页面跳转带 ?code=xxx 进入时自动查询该个股（如「股票筛选」点「查看」）。
@@ -343,6 +490,9 @@ export function StockData() {
           <AlertCircle className="h-4 w-4 shrink-0" /> {err}
         </div>
       )}
+
+      {/* 数据获取状态条：哪些块失败 / 无数据，一眼可见（不静默隐藏） */}
+      <BlockStatusBar states={blockState} errs={blockErr} onRetry={() => { void run(code); }} />
 
       {/* 美股 / 港股视图（global-stock-data，东财域内源） */}
       {gstock && (
@@ -476,35 +626,115 @@ export function StockData() {
             />
           )}
 
-          {/* 公司基本档案（行业/板块/股本/市值/52周/上市日期）——K线之下、财报速览之上 */}
-          {company && (company.industry || company.total_shares != null) && (
+          {/* 公司基本档案（指标 + 名片 + 公司简介/主营/经营范围）——K线之下、财报速览之上 */}
+          {(company || profile) && (
             <GlassCard className="mb-4">
               <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
                 <Building2 className="h-4 w-4 text-primary" /> 公司基本档案
-                <span className="text-xs font-normal text-muted-foreground/60">东财 · 静态资料</span>
+                <span className="text-xs font-normal text-muted-foreground/60">东财 · tushare</span>
               </h3>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[
-                  { k: "所属行业", v: company.industry || "—" },
-                  { k: "所属板块", v: company.board || "—" },
-                  { k: "总市值", v: company.mcap != null ? money(company.mcap) : "—" },
-                  { k: "总股本", v: company.total_shares != null ? `${(company.total_shares / 1e8).toFixed(2)} 亿股` : "—" },
-                  { k: "流通股", v: company.float_shares != null ? `${(company.float_shares / 1e8).toFixed(2)} 亿股` : "—" },
-                  { k: "52周最高", v: company.week52_high != null ? `${company.week52_high.toFixed(2)}` : "—" },
-                  { k: "52周最低", v: company.week52_low != null ? `${company.week52_low.toFixed(2)}` : "—" },
-                  { k: "上市日期", v: company.list_date || "—" },
-                ].map((m) => (
-                  <div key={m.k} className="rounded-lg bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">{m.k}</p>
-                    <p className="mt-0.5 font-mono text-sm font-bold">{m.v}</p>
+
+              {/* ① 档案指标 */}
+              {company && (company.industry || company.total_shares != null) && (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {[
+                    { k: "所属行业", v: company.industry || "—" },
+                    { k: "所属板块", v: company.board || "—" },
+                    { k: "总市值", v: company.mcap != null ? money(company.mcap) : "—" },
+                    { k: "总股本", v: company.total_shares != null ? `${(company.total_shares / 1e8).toFixed(2)} 亿股` : "—" },
+                    { k: "流通股", v: company.float_shares != null ? `${(company.float_shares / 1e8).toFixed(2)} 亿股` : "—" },
+                    { k: "52周最高", v: company.week52_high != null ? `${company.week52_high.toFixed(2)}` : "—" },
+                    { k: "52周最低", v: company.week52_low != null ? `${company.week52_low.toFixed(2)}` : "—" },
+                    { k: "上市日期", v: company.list_date || "—" },
+                  ].map((m) => (
+                    <div key={m.k} className="rounded-lg bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">{m.k}</p>
+                      <p className="mt-0.5 font-mono text-sm font-bold">{m.v}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ② 公司名片（工商信息，来自 tushare；缺失字段不显示） */}
+              {profile && (() => {
+                const rows: { k: string; v: string; href?: string }[] = [];
+                const push = (k: string, v?: string, href?: string) => { if (v) rows.push({ k, v, href }); };
+                push("公司全称", profile.com_name);
+                push("统一社会信用代码", profile.com_id);
+                push("董事长", profile.chairman);
+                push("总经理", profile.manager);
+                push("董秘", profile.secretary);
+                push("注册资本", profile.reg_capital_yi != null ? `${profile.reg_capital_yi.toFixed(2)} 亿元` : "");
+                push("成立日期", profile.setup_date);
+                push("员工人数", profile.employees != null ? `${profile.employees.toLocaleString("zh-CN")} 人` : "");
+                push("注册地", [profile.province, profile.city].filter(Boolean).join("·"));
+                push("办公地址", profile.office);
+                push("官网", profile.website, profile.website ? `https://${profile.website.replace(/^https?:\/\//, "")}` : undefined);
+                push("邮箱", profile.email);
+                if (!rows.length) return null;
+                return (
+                  <div className="mt-4 border-t border-border/40 pt-3">
+                    <p className="mb-2 text-[11px] text-muted-foreground">公司名片</p>
+                    <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
+                      {rows.map((r) => (
+                        <div key={r.k} className="flex gap-2">
+                          <dt className="w-32 shrink-0 text-muted-foreground">{r.k}</dt>
+                          <dd className="min-w-0 flex-1 break-words font-medium">
+                            {r.href
+                              ? <a href={r.href} target="_blank" rel="noreferrer" className="hover:text-primary">{r.v}</a>
+                              : r.v}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
                   </div>
-                ))}
-              </div>
+                );
+              })()}
+
+              {/* ③ 文本层：公司简介 / 主营业务 / 经营范围 */}
+              {profile && (profile.introduction || profile.main_business || profile.business_scope) && (
+                <div className="mt-4 space-y-3 border-t border-border/40 pt-3">
+                  {profile.introduction && (
+                    <div>
+                      <p className="mb-1 text-[11px] text-muted-foreground">公司简介</p>
+                      <ExpandableText text={profile.introduction} clampCls="line-clamp-3" />
+                    </div>
+                  )}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {profile.main_business && (
+                      <div>
+                        <p className="mb-1 text-[11px] text-muted-foreground">主营业务</p>
+                        <ExpandableText text={profile.main_business} clampCls="line-clamp-2" />
+                      </div>
+                    )}
+                    {profile.business_scope && (
+                      <div>
+                        <p className="mb-1 text-[11px] text-muted-foreground">经营范围</p>
+                        <ExpandableText text={profile.business_scope} clampCls="line-clamp-2" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </GlassCard>
+          )}
+
+          {/* 公司基本档案取数失败占位（指标与介绍都取不到时） */}
+          {!company && !profile && (blockState.info === "error" || blockState.profile === "error") && (
+            <FailCard title="公司基本档案" icon={Building2} source="东财 · tushare" err={blockErr.info || blockErr.profile} />
           )}
 
           {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
+
+          {/* 财务数据取数失败占位（财报速览 + 财务关键指标共用同源） */}
+          {blockState.financials === "error" && (
+            <FailCard title="财务数据（财报速览 / 财务关键指标）" icon={BarChart3} source="同花顺财务摘要" err={blockErr.financials} />
+          )}
+
+          {blockState.percentile === "error" && (
+            <FailCard title="估值历史分位" icon={LineChart} source="百度 · 东财" err={blockErr.percentile} />
+          )}
 
           {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb || pctl.metrics.mcap || pctl.metrics.roe) && (
             <GlassCard glow className="mb-4">
@@ -582,6 +812,10 @@ export function StockData() {
             </GlassCard>
           )}
 
+          {blockState.reports === "error" && (
+            <FailCard title="近期研报" icon={FileText} source="东财研报" err={blockErr.reports} />
+          )}
+
           {anns.length > 0 && (
             <GlassCard className="mb-4">
               <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Megaphone className="h-4 w-4 text-primary" /> 巨潮公告（本页 {anns.length}）</h3>
@@ -609,10 +843,16 @@ export function StockData() {
             </GlassCard>
           )}
 
+          {blockState.anns === "error" && (
+            <FailCard title="巨潮公告" icon={Megaphone} source="巨潮" err={blockErr.anns} />
+          )}
+
           <GlassCard>
             <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Newspaper className="h-4 w-4 text-primary" /> 个股新闻（本页 {news.length}）</h3>
             {depNote ? (
               <p className="text-xs text-warning">{depNote}（安装后新闻/公告即可用）</p>
+            ) : blockState.news === "error" ? (
+              <DataNote state="error" err={blockErr.news} source="东财" />
             ) : news.length === 0 ? (
               <p className="text-xs text-muted-foreground/60">暂无新闻</p>
             ) : (
@@ -666,6 +906,12 @@ export function StockData() {
             </GlassCard>
           )}
 
+          {margin.length === 0 && holders.length === 0 && fundFlow.length === 0 && dividend.length === 0 && blockT.length === 0
+            && ["margin", "holders", "fundFlow", "dividend", "blockTrade"].some((k) => blockState[k] === "error") && (
+            <FailCard title="资金面 · 筹码" icon={Wallet} source="东财 · 同花顺"
+              err={["margin", "holders", "fundFlow", "dividend", "blockTrade"].filter((k) => blockState[k] === "error").map((k) => `${BLOCK_LABELS[k]} ${blockErr[k] || ""}`).join("；")} />
+          )}
+
           {/* 龙虎榜 */}
           {dt && dt.records.length > 0 && (
             <GlassCard className="mb-4">
@@ -698,6 +944,10 @@ export function StockData() {
             </GlassCard>
           )}
 
+          {blockState.dragonTiger === "error" && (
+            <FailCard title="龙虎榜" icon={Trophy} source="东财" err={blockErr.dragonTiger} />
+          )}
+
           {/* 限售解禁 */}
           {lockup && (lockup.upcoming.length > 0 || lockup.history.length > 0) && (
             <GlassCard className="mb-4">
@@ -721,6 +971,10 @@ export function StockData() {
                 </div>
               )}
             </GlassCard>
+          )}
+
+          {blockState.lockup === "error" && (
+            <FailCard title="限售解禁" icon={CalendarClock} source="东财" err={blockErr.lockup} />
           )}
 
           {/* 板块归属 · 概念 */}
@@ -747,6 +1001,12 @@ export function StockData() {
             </GlassCard>
           )}
 
+          {(!(blocks?.concept_tags?.length) && !hotCon.length)
+            && (blockState.blocks === "error" || blockState.hotConcepts === "error") && (
+            <FailCard title="板块归属 · 概念" icon={Boxes} source="东财"
+              err={[blockState.blocks === "error" ? `板块 ${blockErr.blocks || ""}` : "", blockState.hotConcepts === "error" ? `热门概念 ${blockErr.hotConcepts || ""}` : ""].filter(Boolean).join("；")} />
+          )}
+
           {/* 投资者互动（互动易） */}
           {qa.filter((q) => q.answer).length > 0 && (
             <GlassCard className="mb-4">
@@ -761,6 +1021,10 @@ export function StockData() {
                 ))}
               </div>
             </GlassCard>
+          )}
+
+          {blockState.investorQa === "error" && (
+            <FailCard title="投资者互动（互动易）" icon={MessageSquare} source="东财" err={blockErr.investorQa} />
           )}
         </>
       )}

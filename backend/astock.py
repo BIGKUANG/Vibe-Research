@@ -189,11 +189,16 @@ def a_share_universe() -> list[dict]:
     return rows
 
 
-# 腾讯日K线（后复权），不走 mootdx/akshare 等外部依赖
-def tencent_kline(code: str, offset: int = 120) -> list[dict]:
-    """腾讯财经日K线（前复权），返回 [{close, open, high, low, volume, date}]。"""
+# 腾讯日K线，不走 mootdx/akshare 等外部依赖
+def tencent_kline(code: str, offset: int = 120, adjust: str = "qfq") -> list[dict]:
+    """腾讯财经日K线，返回 [{close, open, high, low, volume, date}]。
+
+    adjust="qfq"（默认，前复权）；adjust="none" 不复权（用于 52 周高低等同口径场景，
+    避免前复权历史价与不复权现价混用产生误导）。
+    """
     prefix = get_prefix(code)
-    url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={prefix}{code},day,,,{offset},qfq"
+    field = "qfq" if adjust == "qfq" else ""
+    url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={prefix}{code},day,,,{offset},{field}"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=10) as resp:
         body = resp.read()
@@ -424,7 +429,9 @@ def individual_info(code: str) -> dict:
         except Exception:
             continue
     if not d:
-        return {}
+        # push2 不可达（典型：stock/get 被网络/代理拦截，而 clist 仍可用）→ 降级
+        # datacenter-web F10 + 腾讯行情/日K，保证「公司基本档案」卡有数据可展示。
+        return _individual_info_fallback(code)
 
     def _f(v):
         return v if isinstance(v, (int, float)) else None
@@ -446,6 +453,230 @@ def individual_info(code: str) -> dict:
         "list_date": list_date,                # 上市日期 YYYY-MM-DD
         "price": _f(d.get("f43")),
     }
+
+
+def _dc_first(report: str, secucode: str, sort_column: str | None = None,
+              page_size: int = 1) -> dict:
+    """东财 datacenter-web 单表单行查询，失败/无数据返回 {}（不抛异常）。"""
+    params = {
+        "reportName": report,
+        "columns": "ALL",
+        "filter": f'(SECUCODE="{secucode}")',
+        "pageNumber": "1",
+        "pageSize": str(page_size),
+    }
+    if sort_column:
+        params["sortColumns"] = sort_column
+        params["sortTypes"] = "-1"
+    try:
+        r = em_get("https://datacenter-web.eastmoney.com/api/data/v1/get",
+                   params=params, headers={"User-Agent": UA}, timeout=10)
+        data = (r.json().get("result") or {}).get("data") or []
+        return data[0] if data else {}
+    except Exception:
+        return {}
+
+
+def _individual_info_fallback(code: str) -> dict:
+    """push2 不可达时的公司基本档案降级源（datacenter-web F10 + 腾讯）。
+
+    - F10 RPT_F10_BASIC_ORGINFO：行业 / 板块 / 上市日期 / 名称
+    - F10 RPT_F10_EH_EQUITY（最新一期）：总股本 / 流通股
+    - 腾讯行情：现价 / 总市值 / 流通市值
+    - 腾讯不复权日K（近 250 交易日）：52 周最高 / 最低（与现价同口径）
+    """
+    suffix = {"sh": "SH", "sz": "SZ", "bj": "BJ"}.get(get_prefix(code), "SH")
+    secucode = f"{code}.{suffix}"
+    out = {
+        "code": code, "name": "", "industry": "", "board": "",
+        "total_shares": None, "float_shares": None, "mcap": None, "float_mcap": None,
+        "week52_high": None, "week52_low": None, "list_date": "", "price": None,
+    }
+
+    org = _dc_first("RPT_F10_BASIC_ORGINFO", secucode)
+    if org:
+        out["name"] = org.get("SECURITY_NAME_ABBR") or org.get("STR_NAMEA") or ""
+        out["industry"] = org.get("EM2016") or org.get("INDUSTRYCSRC1") or ""
+        out["board"] = org.get("TRADE_MARKETT") or org.get("TRADE_MARKET") or ""
+        ld = str(org.get("LISTING_DATE") or "")
+        out["list_date"] = ld[:10] if ld else ""
+
+    eq = _dc_first("RPT_F10_EH_EQUITY", secucode, sort_column="END_DATE")
+    if eq:
+        out["total_shares"] = _numf(eq.get("TOTAL_SHARES"))
+        out["float_shares"] = _numf(eq.get("UNLIMITED_SHARES")) or _numf(eq.get("LISTED_A_SHARES"))
+
+    try:
+        q = tencent_quote([code]).get(code) or {}
+        out["name"] = out["name"] or q.get("name", "")
+        out["price"] = q.get("price")
+        if q.get("mcap_yi"):
+            out["mcap"] = q["mcap_yi"] * 1e8
+        if q.get("float_mcap_yi"):
+            out["float_mcap"] = q["float_mcap_yi"] * 1e8
+    except Exception:
+        pass
+
+    try:
+        bars = tencent_kline(code, offset=250, adjust="none")
+        if bars:
+            out["week52_high"] = max(b["high"] for b in bars)
+            out["week52_low"] = min(b["low"] for b in bars)
+    except Exception:
+        pass
+
+    return out
+
+
+def _ts_code(code: str) -> str:
+    """6 位代码 → tushare ts_code（600519 → 600519.SH）。"""
+    suffix = {"sh": "SH", "sz": "SZ", "bj": "BJ"}.get(get_prefix(code))
+    return f"{code}.{suffix}" if suffix else ""
+
+
+def _fmt_date10(v: str) -> str:
+    """'19991120' / '1999-11-20 00:00:00' → '1999-11-20'；其它原样返回。"""
+    v = (v or "").strip()
+    if len(v) >= 10 and v[4] == "-" and v[7] == "-":
+        return v[:10]
+    if len(v) == 8 and v.isdigit():
+        return f"{v[:4]}-{v[4:6]}-{v[6:]}"
+    return v
+
+
+# 公司名片/文本字段（合并与输出共用，保证键稳定，前端可安全取值）
+_PROFILE_FIELDS = (
+    "com_name", "com_id", "chairman", "manager", "secretary",
+    "reg_capital_yi", "setup_date", "employees", "province", "city",
+    "office", "website", "email", "introduction", "main_business", "business_scope",
+)
+
+
+def _company_profile_ts(ts_code: str) -> dict:
+    """tushare stock_company 取公司资料；未配置 token / 无权限 / 未收录 → {}。"""
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token or not ts_code:
+        return {}
+    try:
+        import tushare as ts  # 惰性依赖：未安装直接跳过
+    except Exception:
+        return {}
+    try:
+        pro = ts.pro_api(token)
+        url = os.environ.get("TUSHARE_HTTP_URL", "").strip()
+        if url:
+            pro._DataApi__http_url = url
+        df = pro.stock_company(ts_code=ts_code)
+    except Exception:
+        return {}
+    if df is None or len(df) == 0:
+        return {}
+    row = df.iloc[0]
+
+    def s(key: str) -> str:
+        v = row.get(key)
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return ""
+        return str(v).strip()
+
+    def n(key: str):
+        v = row.get(key)
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    reg_wan = n("reg_capital")   # 万元
+    emp = n("employees")
+    return {
+        "com_name": s("com_name"),              # 公司全称
+        "com_id": s("com_id"),                  # 统一社会信用代码
+        "chairman": s("chairman"),              # 董事长
+        "manager": s("manager"),                # 总经理
+        "secretary": s("secretary"),            # 董秘
+        "reg_capital_yi": round(reg_wan / 1e4, 4) if reg_wan is not None else None,  # 万元 → 亿元
+        "setup_date": _fmt_date10(s("setup_date")),
+        "employees": int(emp) if emp is not None else None,
+        "province": s("province"),
+        "city": s("city"),
+        "office": s("office"),                  # 办公地址
+        "website": s("website"),
+        "email": s("email"),
+        "introduction": s("introduction"),      # 公司简介
+        "main_business": s("main_business"),    # 主营业务
+        "business_scope": s("business_scope"),  # 经营范围
+    }
+
+
+def _company_profile_em(ts_code: str) -> dict:
+    """东财 F10 公司概况（datacenter-web RPT_F10_BASIC_ORGINFO）。
+
+    用于 tushare 未收录（典型：新上市股票）时补齐名片与公司简介。
+    """
+    d = _dc_first("RPT_F10_BASIC_ORGINFO", ts_code)
+    if not d:
+        return {}
+
+    def s(key: str) -> str:
+        v = d.get(key)
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return ""
+        return str(v).strip()
+
+    def n(key: str):
+        v = d.get(key)
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    reg_wan = n("REG_CAPITAL")   # 万元
+    emp = n("EMP_NUM")
+    return {
+        "com_name": s("ORG_NAME"),
+        "com_id": s("REG_NUM"),                 # 统一社会信用代码
+        "chairman": s("CHAIRMAN"),
+        "manager": s("PRESIDENT"),
+        "secretary": s("SECRETARY"),
+        "reg_capital_yi": round(reg_wan / 1e4, 4) if reg_wan is not None else None,
+        "setup_date": _fmt_date10(s("FOUND_DATE")),
+        "employees": int(emp) if emp is not None else None,
+        "province": s("PROVINCE"),
+        "city": s("CITY"),
+        "office": s("ADDRESS"),
+        "website": s("ORG_WEB"),
+        "email": s("ORG_EMAIL"),
+        "introduction": s("ORG_PROFILE").strip(),
+        "main_business": s("MAIN_BUSINESS"),
+        "business_scope": s("BUSINESS_SCOPE"),
+    }
+
+
+def company_profile(code: str) -> dict:
+    """公司名片 + 公司简介 / 主营业务 / 经营范围。
+
+    数据源：优先 tushare `stock_company`；缺失时用东财 F10 补齐（字段级合并，tushare 优先）。
+    两者都取不到 → 返回 {}，由前端隐藏「公司名片 / 介绍」部分，不影响基本档案指标格。
+    合规：只返回公开披露的公司资料，不含任何评级 / 目标价 / 买卖建议。
+    """
+    ts_code = _ts_code(code)
+    if not ts_code:
+        return {}
+    merged: dict = {}
+    for src in (_company_profile_ts(ts_code), _company_profile_em(ts_code)):
+        for k, v in src.items():
+            if v not in (None, "") and not merged.get(k):
+                merged[k] = v
+    if not any(merged.get(k) for k in ("com_name", "introduction", "main_business", "business_scope")):
+        return {}
+    out: dict = {"code": ts_code}
+    for k in _PROFILE_FIELDS:
+        out[k] = merged.get(k, None if k in ("reg_capital_yi", "employees") else "")
+    return out
 
 
 _CNINFO_ORGID_MAP: dict[str, str] = {}

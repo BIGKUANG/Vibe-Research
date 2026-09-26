@@ -107,6 +107,14 @@ export function KLineChart({ data, symbol, loading, error }: Props) {
   }, [rows, width]);
 
   const active = hover != null ? rows[hover] : null;
+  // 当日涨跌幅：以前一交易日收盘为分母（首根无前收 → 显示 --，不臆造）
+  const activePct = useMemo(() => {
+    if (hover == null || !active) return null;
+    const prev = hover > 0 ? rows[hover - 1] : null;
+    const base = prev?.close;
+    if (!base || !(base > 0)) return null;
+    return ((active.close - base) / base) * 100;
+  }, [active, hover, rows]);
   // 十字星处对应的价格（hoverY 在价格面板内）
   const hoverPrice = geom && hoverY != null
     ? geom.priceMin + (1 - (hoverY - M_T) / PRICE_H) * (geom.priceMax - geom.priceMin)
@@ -159,6 +167,7 @@ export function KLineChart({ data, symbol, loading, error }: Props) {
       </h3>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground">
+        <span title="相对前一交易日收盘的涨跌幅">涨幅 <b className={cn("text-xs font-bold", activePct == null ? "text-muted-foreground" : activePct > 0 ? "text-danger" : activePct < 0 ? "text-success" : "text-muted-foreground")}>{activePct == null ? "--" : `${activePct > 0 ? "+" : ""}${activePct.toFixed(2)}%`}</b></span>
         <span>开 <b className={cn("text-xs font-bold", active ? (active.open >= active.close ? "text-danger" : "text-success") : "")}>{active?.open ?? "--"}</b></span>
         <span>高 <b className="text-xs font-bold text-danger">{active?.high ?? "--"}</b></span>
         <span>低 <b className="text-xs font-bold text-success">{active?.low ?? "--"}</b></span>
