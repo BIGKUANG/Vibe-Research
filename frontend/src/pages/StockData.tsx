@@ -224,9 +224,6 @@ function BlockStatusBar({ states, errs, onRetry }: {
       {failed.length > 0 && (
         <p className="mt-2 text-destructive">
           <span className="font-medium">获取失败</span>：{failed.map(name).join("、")}
-          {failed.some((k) => errs[k]) && (
-            <span className="text-muted-foreground/70">（{failed.filter((k) => errs[k]).map((k) => `${name(k)} ${errs[k]}`).join("；")}）</span>
-          )}
         </p>
       )}
       {empty.length > 0 && (
@@ -387,7 +384,7 @@ export function StockData() {
     track("fundFlow", api.fundFlow(c), setFundFlow);
     track("dragonTiger", api.dragonTiger(c), setDt, (v) => !v || v.records.length === 0);
     track("lockup", api.lockup(c), setLockup, (v) => !v || (v.upcoming.length === 0 && v.history.length === 0));
-    track("blocks", api.blocks(c), setBlocks, (v) => !v || v.concept_tags.length === 0);
+    track("blocks", api.blocks(c), setBlocks, (v) => !v || (v.concept_tags.length === 0 && !v.boards?.length));
     track("hotConcepts", api.hotConcepts(c), setHotCon);
     track("investorQa", api.investorQa(c), setQa);
     track("info", api.info(c), setCompany);

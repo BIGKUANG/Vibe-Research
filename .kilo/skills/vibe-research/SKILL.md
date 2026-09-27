@@ -86,9 +86,16 @@ cd desktop && npm test                      # node --test test/*.test.ts
 - `.gitignore` 已覆盖：`.local/`、`.env*`（保留 `.env.example`）、`node_modules/`、`dist/`、`logs/`、`.vite/`、`*.tsbuildinfo`；不要提交密钥与产物
 
 ## 股票取数规则（统一在 astock.py 实现）
+- **取数来源优先级（实现任何需要股票数据的功能时，一律按此顺序）**：
+  1. 先看 `backend/astock.py` 是否已支持该数据 → 有就直接用。
+  2. 未支持时，**优先参考 `a-stock-data/SKILL.md`**（A股全栈数据工具包 v3.6，十层 47 端点，含行情/K线/研报/新闻/打板/热榜/资金面/公告/ETF期权等）的端点与方法，在 `astock.py` 自包含实现。
+  3. **`a-stock-data` 取不到时（端点失效 / 无该字段 / 无权限 / 非零鉴权），再参考 `tushare-data/SKILL.md`**（tushare 数据 skill）补齐。
+  4. 两者都取不到 → 标「未获取」，不编值。
+- **降级必须出声**：记录「先试哪个源、为何失败、最终用哪个源」，不静默取舍；可用 `tushare-data` 的接口以 `tushare-data/references/数据接口.md` 为准。
+- **tushare 凭据**：token 从环境变量 `TUSHARE_TOKEN` 读取（项目根 `.env`，勿硬编码），服务地址用 `TUSHARE_HTTP_URL`；后端经 `backend/astock.py` 惰性导入 `tushare`，未配置时优雅降级。
 - **开发 vibe-research 功能时，凡需要获取股票数据**：先看 `backend/astock.py` 是否已支持该数据。
 - 若 `astock.py` 不支持：
-  1. 去 `a-stock-data/SKILL.md`（A股全栈数据工具包 v3.6 参考文档，十层 47 端点，含行情/K线/研报/新闻/打板/热榜/资金面/公告/ETF期权等）查看该数据的获取方法、接口签名、端点与坑点（文档自带可直接移植的样例代码）。
+  1. 去 `a-stock-data/SKILL.md` 查看该数据的获取方法、接口签名、端点与坑点（文档自带可直接移植的样例代码）；取不到再查 `tushare-data/SKILL.md` / `tushare-data/references/数据接口.md`。
   2. **参考该方法在 `backend/astock.py` 中实现取数函数**（不要另起新模块）——沿用本项目惯例：**自包含移植**（直接 urllib/requests 调端点，不依赖 a-stock-data pip 包），函数风格与既有代码一致（`DependencyMissing` 惰性依赖、`em_get` 限流、返回 list[dict]、字段命名与调用方对齐）。
   3. 在 `backend/app.py` 注册 `/api/*` 路由（含鉴权与错误处理），前端 `frontend/src/lib/api.ts` 加类型与方法后接入页面。
 - **a-stock-data 目录约定**：仓库根目录 `a-stock-data/` 只是参考文档目录，**只提交其中的 `SKILL.md`**，其余（源码/示例/资产/`.git.bak`）一律不提交（外层 `.gitignore` 已配置 `a-stock-data/*` + `!a-stock-data/SKILL.md`）。其内嵌 `.git` 已改名 `.git.bak` 保证 SKILL.md 可入库；任何人想恢复该目录为可更新仓库需先把 `.git.bak` 改回 `.git`。

@@ -1397,7 +1397,10 @@ def dividend_history(code: str, page_size: int = 20) -> list[dict]:
 
 
 def stock_fund_flow_120d(code: str) -> list[dict]:
-    """个股资金流（日级，最近 120 交易日）：主力 / 小单 / 中单 / 大单 / 超大单净流入（元）。"""
+    """个股资金流（日级，最近 120 交易日）：主力 / 小单 / 中单 / 大单 / 超大单净流入（元）。
+
+    优先东财 push2his；不可达时降级 tushare moneyflow。
+    """
     market_code = 1 if code.startswith("6") else 0
     params = {
         "secid": f"{market_code}.{code}",
@@ -1409,22 +1412,68 @@ def stock_fund_flow_120d(code: str) -> list[dict]:
     try:
         d = em_get("https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
                    params=params, headers=headers, timeout=15).json()
+        rows = []
+        for line in d.get("data", {}).get("klines", []):
+            p = line.split(",")
+            if len(p) >= 6:
+                def _f(x):
+                    try:
+                        return float(x) if x not in ("-", "") else 0.0
+                    except ValueError:
+                        return 0.0
+                rows.append({
+                    "date": p[0], "main_net": _f(p[1]), "small_net": _f(p[2]),
+                    "mid_net": _f(p[3]), "large_net": _f(p[4]), "super_net": _f(p[5]),
+                })
+        if rows:
+            return rows
+    except Exception:
+        pass
+    # 降级 tushare moneyflow
+    return _tushare_fund_flow(code)
+
+
+def _tushare_fund_flow(code: str) -> list[dict]:
+    """tushare moneyflow 降级：返回最近 120 日资金流。"""
+    import os
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token:
+        return []
+    try:
+        import tushare as ts
+        pro = ts.pro_api(token)
+        url = os.environ.get("TUSHARE_HTTP_URL", "").strip()
+        if url:
+            pro._DataApi__http_url = url
+        ts_code = _ts_code(code)
+        if not ts_code:
+            return []
+        # 取最近 120 交易日（约 6 个月）
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=180)).strftime("%Y%m%d")
+        df = pro.moneyflow(ts_code=ts_code, start_date=start, end_date=end)
+        if df is None or len(df) == 0:
+            return []
+        rows = []
+        for _, r in df.head(120).iterrows():
+            # tushare 字段：buy_sm/sell_sm（小单）、buy_md/sell_md（中单）、buy_lg/sell_lg（大单）、buy_elg/sell_elg（超大单）
+            # 单位：万元 → 元
+            small = (r.get("buy_sm_amount", 0) or 0) - (r.get("sell_sm_amount", 0) or 0)
+            mid = (r.get("buy_md_amount", 0) or 0) - (r.get("sell_md_amount", 0) or 0)
+            large = (r.get("buy_lg_amount", 0) or 0) - (r.get("sell_lg_amount", 0) or 0)
+            super_lg = (r.get("buy_elg_amount", 0) or 0) - (r.get("sell_elg_amount", 0) or 0)
+            main = large + super_lg  # 主力 = 大单 + 超大单
+            rows.append({
+                "date": str(r.get("trade_date", "")),
+                "main_net": main * 1e4,
+                "small_net": small * 1e4,
+                "mid_net": mid * 1e4,
+                "large_net": large * 1e4,
+                "super_net": super_lg * 1e4,
+            })
+        return rows
     except Exception:
         return []
-    rows = []
-    for line in d.get("data", {}).get("klines", []):
-        p = line.split(",")
-        if len(p) >= 6:
-            def _f(x):
-                try:
-                    return float(x) if x not in ("-", "") else 0.0
-                except ValueError:
-                    return 0.0
-            rows.append({
-                "date": p[0], "main_net": _f(p[1]), "small_net": _f(p[2]),
-                "mid_net": _f(p[3]), "large_net": _f(p[4]), "super_net": _f(p[5]),
-            })
-    return rows
 
 
 def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int = 30) -> dict:
@@ -1482,6 +1531,7 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
 
     字段随东财 2026 改列名同步（a-stock-data §3.6）：旧 LIMITED_STOCK_TYPE/FREE_SHARES_NUM
     已废、致 type/shares 恒空 → 改 FREE_SHARES_TYPE/FREE_SHARES，并补 able_shares（实际可流通股数）。
+    东财无数据时降级 tushare share_float。
     """
     trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
     history = [{
@@ -1501,7 +1551,45 @@ def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 
         "RPT_LIFT_STAGE",
         filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{trade_date}\')(FREE_DATE<=\'{end}\')',
         page_size=20, sort_columns="FREE_DATE", sort_types="1")]
+    # 东财无数据时降级 tushare
+    if not history and not upcoming:
+        return _tushare_lockup(code)
     return {"history": history, "upcoming": upcoming}
+
+
+def _tushare_lockup(code: str) -> dict:
+    """tushare share_float 降级：返回历史解禁记录（无未来解禁预测）。"""
+    import os
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token:
+        return {"history": [], "upcoming": []}
+    try:
+        import tushare as ts
+        pro = ts.pro_api(token)
+        url = os.environ.get("TUSHARE_HTTP_URL", "").strip()
+        if url:
+            pro._DataApi__http_url = url
+        ts_code = _ts_code(code)
+        if not ts_code:
+            return {"history": [], "upcoming": []}
+        df = pro.share_float(ts_code=ts_code)
+        if df is None or len(df) == 0:
+            return {"history": [], "upcoming": []}
+        history = []
+        for _, r in df.iterrows():
+            date = str(r.get("float_date", ""))
+            if len(date) == 8:
+                date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+            history.append({
+                "date": date[:10],
+                "type": r.get("share_type", ""),
+                "shares": r.get("float_share", 0),
+                "able_shares": r.get("float_share", 0),
+                "ratio": r.get("float_ratio", 0),
+            })
+        return {"history": history, "upcoming": []}
+    except Exception:
+        return {"history": [], "upcoming": []}
 
 
 def concept_blocks(code: str) -> dict:
@@ -1538,7 +1626,19 @@ def hot_concepts(code: str) -> list[dict]:
 
 
 def investor_qa(code: str, page_size: int = 30) -> list[dict]:
-    """互动易问答（巨潮）：投资者提问 + 公司回复（answer=None 表示未回复）。"""
+    """互动易问答：深市走巨潮 cninfo，沪市走上证e互动（akshare）。
+
+    返回每条: company/question/answer/answerer/ask_time。answer=None 表示未回复。
+    """
+    # 沪市（6/9/5/688 开头）走上证e互动
+    if code.startswith(("6", "9", "5")):
+        return _sse_irm(code, page_size)
+    # 深市走巨潮 cninfo
+    return _cninfo_irm(code, page_size)
+
+
+def _cninfo_irm(code: str, page_size: int = 30) -> list[dict]:
+    """深市互动易（巨潮 cninfo）。"""
     import requests
 
     try:
@@ -1564,6 +1664,30 @@ def investor_qa(code: str, page_size: int = 30) -> list[dict]:
             "ask_time": datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M") if ts else "",
         })
     return out
+
+
+def _sse_irm(code: str, page_size: int = 30) -> list[dict]:
+    """沪市上证e互动（akshare stock_sns_sseinfo）。
+
+    akshare 惰性导入；对无数据股票快速返回（1 页），活跃股票可能分页（较慢但可接受）。
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_sns_sseinfo(symbol=code)
+        if df is None or len(df) == 0:
+            return []
+        out = []
+        for _, r in df.head(page_size).iterrows():
+            out.append({
+                "company": r.get("公司简称", ""),
+                "question": r.get("问题", ""),
+                "answer": r.get("回答") if r.get("回答") else None,
+                "answerer": r.get("回答来源", ""),
+                "ask_time": str(r.get("问题时间", ""))[:16],
+            })
+        return out
+    except Exception:
+        return []
 
 
 def industry_comparison(top_n: int = 20) -> dict:
