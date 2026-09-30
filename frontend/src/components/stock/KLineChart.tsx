@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
 import { CandlestickChart } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { cn } from "@/lib/utils";
@@ -65,20 +65,24 @@ export function KLineChart({ data, symbol, loading, error }: Props) {
   const rows = useMemo<KRow[]>(() => (data ?? []) as unknown as KRow[], [data]);
   const [hover, setHover] = useState<number | null>(null);
   const [hoverY, setHoverY] = useState<number | null>(null);  // 十字星水平线（价格轴）位置
-  const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);  // 容器宽度：按它把所有 K 线铺满，免横向滑动
+  const roRef = useRef<ResizeObserver | null>(null);
 
-  // 监听容器宽度（响应式）：宽度变化时重算每根 K 线间距，始终展示全部数据
-  useEffect(() => {
-    const el = wrapRef.current;
+  // 用回调 ref 监听容器宽度（响应式）。不能只用 useEffect([])：组件可能先渲染
+  // 「暂无数据」分支（不含图表容器），数据到达后才挂上容器；若只在 mount 时取 ref，
+  // 会漏测宽度 → 退化为固定间距、SVG 宽度超出容器被 overflow-hidden 裁掉右侧最新若干根
+  // K 线（偶发"缺最新几天"）。回调 ref 每次挂载/卸载都重新观测，避免该竞态。
+  const attachWrap = useCallback((el: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    roRef.current = null;
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width ?? 0;
       if (w > 0) setWidth(w);
     });
     ro.observe(el);
-    setWidth(el.clientWidth);
-    return () => ro.disconnect();
+    roRef.current = ro;
+    if (el.clientWidth > 0) setWidth(el.clientWidth);
   }, []);
 
   const geom = useMemo(() => {
@@ -134,7 +138,8 @@ export function KLineChart({ data, symbol, loading, error }: Props) {
     const step = Math.max(1, Math.floor(rows.length / 7));
     const idxs: number[] = [];
     for (let i = rows.length - 1; i >= 0; i -= step) idxs.unshift(i);
-    if (idxs[0] !== 0 && rows.length > 1) idxs.unshift(0);
+    // 仅当首根与下一刻度间距足够时才补 0，避免与 idxs[0] 贴着导致日期标签重叠
+    if (idxs[0] !== 0 && idxs[0] > Math.ceil(step / 2)) idxs.unshift(0);
     return idxs;
   }, [rows]);
 
@@ -176,7 +181,7 @@ export function KLineChart({ data, symbol, loading, error }: Props) {
         <span className="text-muted-foreground/50">{active ? fmtDate(active.date) : "--"}</span>
       </div>
 
-      <div ref={wrapRef} className="mt-2 overflow-hidden">
+      <div ref={attachWrap} className="mt-2 overflow-hidden">
         <svg
           width={geom.W} height={geom.H}
           className="block"

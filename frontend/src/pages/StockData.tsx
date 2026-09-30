@@ -204,7 +204,7 @@ function DataNote({ state, err, source }: { state?: LoadState; err?: string; sou
 }
 
 // 页面级数据状态条：一眼看到哪些块获取失败 / 无数据
-function BlockStatusBar({ states, errs, onRetry }: {
+function BlockStatusBar({ states, onRetry }: {
   states: Record<string, LoadState>; errs: Record<string, string>; onRetry: () => void;
 }) {
   const failed = Object.keys(states).filter((k) => states[k] === "error");
