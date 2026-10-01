@@ -241,4 +241,4 @@ upload(files)
 | `backend/myreports.py` | 归档实现：存储目录解析、历史迁移、扩展名白名单、base64 解码、大小限制、文件名净化、关键词分类、索引原子读写 |
 | `backend/.gitignore` | 忽略旧目录 `.cache/`（旧版研报位置） |
 
-> 与 `docs/daily-review-page-layout.md`、`docs/watchlist-page-layout.md` 同属旧版 Web 应用的页面说明；「研究记录」(`/notes`) 的浏览器 `localStorage` 存储口径见对话记录，两处存储互不相同。
+> 与 `docs/ui-design/daily-review-page-ui-design.md`、`docs/ui-design/watchlist-page-layout.md` 同属旧版 Web 应用的页面说明；「研究记录」(`/notes`) 的浏览器 `localStorage` 存储口径见对话记录，两处存储互不相同。

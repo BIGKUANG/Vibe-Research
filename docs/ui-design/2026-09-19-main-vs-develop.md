@@ -321,4 +321,4 @@ git show main:CHANGELOG.md | head -60
 | `docs/README更新验收_M39_2026-09-07.md` | README 更新 |
 | `docs/发布候选与隐私验收_M40_2026-09-07.md` | 发布候选与隐私验收 |
 
-> 与 `docs/stock-screener-page-design.md`、`docs/daily-review-page-layout.md`、`docs/my-reports-page.md`、`docs/watchlist-page-layout.md` 等 fork 侧文档分属两条线：前者描述上游新版工作台，后者描述旧版 Web 应用。
+> 与 `docs/ui-design/stock-screener-page-design.md`、`docs/ui-design/daily-review-page-ui-design.md`、`docs/ui-design/my-reports-page.md`、`docs/ui-design/watchlist-page-layout.md` 等 fork 侧文档分属两条线：前者描述上游新版工作台，后者描述旧版 Web 应用。

@@ -10,4 +10,5 @@
 - 编排器细节(状态机 / validator / hooks / 配置 / MCP / HTTP API / 批量 / 提醒 / 矩阵):[../orchestrator/README.md](../orchestrator/README.md)
 - 数据源端点目录(自动生成):[../datasources/CATALOG.md](../datasources/CATALOG.md)
 - 计算库契约:[../calc/SPEC.md](../calc/SPEC.md)
+- UI 页面设计文档(旧版 Web 应用,每页一份):[ui-design/](ui-design/) — 命名与约束见 [../.kilo/ui-page-design.md](../.kilo/ui-page-design.md)
 - provider 模板字段与约束:[../providers/README.md](../providers/README.md)

@@ -388,7 +388,7 @@ export function DailyReview() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                        {["名称", "连板", "现价", "涨停%", "成交额", "流通市值", "概念"].map((h) => (
+                        {["名称", "连板", "现价", "涨停%", "成交额", "流通市值", "行业"].map((h) => (
                           <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
                         ))}
                       </tr>

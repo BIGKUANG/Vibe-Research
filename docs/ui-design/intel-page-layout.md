@@ -419,4 +419,4 @@ AI 要点：chatStream() → 把该赛道前 25 条压成「[时间] 来源｜�
 | `backend/news_sources.json` | 12 赛道 / 108 源 / 抓取参数 / 合规词表 |
 | `backend/.cache/radar.json` | 运行时缓存（不入库） |
 
-> 同属旧版 Web 应用的页面说明另见 `docs/daily-review-page-layout.md`、`docs/watchlist-page-layout.md`、`docs/my-reports-page.md`、`docs/stock-screener-page-design.md`。
+> 同属旧版 Web 应用的页面说明另见 `docs/ui-design/daily-review-page-ui-design.md`、`docs/ui-design/watchlist-page-layout.md`、`docs/ui-design/my-reports-page.md`、`docs/ui-design/stock-screener-page-design.md`。
