@@ -88,8 +88,8 @@
 ```
 
 - 卡头一行（`mb-2.5 flex flex-wrap items-center justify-between gap-2`）：左 `Plus` 图标（`text-primary`）+「添加自选」（`font-semibold`）；右浅色说明（`text-[11px] text-muted-foreground/70`）。
-- 输入行与「个股数据」一致：同一个 `StockCodeInput`，样式/交互完全相同；自选页把输入框拉满（`inputClassName="flex-1 min-w-0"`），下拉宽度随容器（`dropdownClassName="w-full"`）。
-- **图层（重要）**：`.glass` 的 `backdrop-filter: blur()` 会为玻璃卡创建**层叠上下文**。若不处理，[B] 卡内下拉建议的 `z-50` 只在 [B] 卡内部生效，而后渲染的 [C] 玻璃卡（`z: auto`）会整体盖住它。故 [B] 卡需 `relative z-30`，使其层叠顺序高于 [C] 卡，下拉即可正常浮在 [C] 之上。
+- 输入行与「个股数据」一致：同一个 `StockCodeInput`，样式/交互完全相同；自选页把输入框拉满（`inputClassName="flex-1 min-w-0"`），下拉宽度随容器（`dropdownClassName="w-full"`，实际由组件按容器测量覆盖）。
+- **图层（已改为 portal）**：`StockCodeInput` 的下拉改用 `createPortal` 渲染到 `document.body` + `position: fixed`（`z-index:1000`），因此**不再受 `.glass` 的 `backdrop-filter` 层叠上下文影响**，无需再靠卡片抬 `z-index` 就能浮在最外层（[B] 上的 `relative z-30` 保留但已非必需）。
 - 反馈：`hint`（`mt-2 text-xs text-muted-foreground/70`）。
 
 #### B.2 复用（与个股页同源，最大化复用）

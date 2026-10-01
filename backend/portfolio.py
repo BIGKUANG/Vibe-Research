@@ -126,26 +126,40 @@ def get_portfolio() -> dict:
     with _LOCK:
         d = _load()
     hs = d.get("holdings", [])
-    rows, tmv, tcost = [], 0.0, 0.0
+    rows, tmv, tcost, failed = [], 0.0, 0.0, 0
     if hs:
         try:
             quotes = astock.tencent_quote([h["code"] for h in hs])
         except Exception:
             quotes = {}
         for h in hs:
-            q = quotes.get(h["code"], {})
-            price = q.get("price", 0.0)
-            mv = price * h["shares"]
+            q = quotes.get(h["code"]) or {}
+            price = q.get("price")
+            # 行情有效 = 取到正数现价。取不到时 price=None，绝不按 0 元计算——
+            # 否则会把「取数失败」渲染成市值 0 / 浮亏 -100%，并污染汇总（用户无法分辨真假）。
+            quote_ok = isinstance(price, (int, float)) and price > 0
             cv = h["cost"] * h["shares"]
-            pnl = mv - cv
-            rows.append({
-                "code": h["code"], "name": q.get("name", h["code"]),
-                "price": price, "shares": h["shares"], "cost": h["cost"],
-                "market_value": round(mv, 2), "pnl": round(pnl, 2),
-                "pnl_pct": round(pnl / cv * 100, 2) if cv else 0.0,
-            })
-            tmv += mv
-            tcost += cv
+            name = q.get("name") or h["code"]
+            if quote_ok:
+                mv = price * h["shares"]
+                pnl = mv - cv
+                rows.append({
+                    "code": h["code"], "name": name,
+                    "price": price, "shares": h["shares"], "cost": h["cost"],
+                    "market_value": round(mv, 2), "pnl": round(pnl, 2),
+                    "pnl_pct": round(pnl / cv * 100, 2) if cv else 0.0,
+                    "quote_ok": True,
+                })
+                tmv += mv
+                tcost += cv
+            else:
+                failed += 1
+                rows.append({
+                    "code": h["code"], "name": name,
+                    "price": None, "shares": h["shares"], "cost": h["cost"],
+                    "market_value": None, "pnl": None, "pnl_pct": None,
+                    "quote_ok": False,
+                })
     total_pnl = tmv - tcost
     closed = d.get("closed", [])
     return {
@@ -159,6 +173,7 @@ def get_portfolio() -> dict:
         "realized_pnl": round(sum(c.get("pnl", 0) for c in closed), 2),
         "updated": _now(),
         "last_refresh": d.get("last_refresh"),
+        "quote_failed": failed,
     }
 
 

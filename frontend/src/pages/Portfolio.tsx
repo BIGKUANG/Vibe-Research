@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { Disclaimer } from "@/components/ui/Disclaimer";
+import { StockCodeInput } from "@/components/stock/StockCodeInput";
 import { api, ApiError, type PortfolioData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -47,13 +48,14 @@ export function Portfolio() {
     return () => clearInterval(t);
   }, [load]);
 
-  const add = async () => {
-    if (!/^\d{6}$/.test(code.trim())) { setErr("请输入 6 位股票代码"); return; }
+  const add = async (codeArg?: string) => {
+    const c0 = (codeArg ?? code).trim();
+    if (!/^\d{6}$/.test(c0)) { setErr("请输入 6 位股票代码"); return; }
     const s = parseFloat(shares), c = parseFloat(cost);
     if (!(s > 0) || !Number.isFinite(c)) { setErr("数量须大于 0，成本价请填数字（可为负）"); return; }
     setAdding(true); setErr(null);
     try {
-      setData(await api.addHolding(code.trim(), s, c));
+      setData(await api.addHolding(c0, s, c));
       setCode(""); setShares(""); setCost("");
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加失败");
@@ -63,17 +65,19 @@ export function Portfolio() {
   };
 
   const remove = async (c: string) => {
-    try { setData(await api.removeHolding(c)); } catch { /* ignore */ }
+    try { setData(await api.removeHolding(c)); }
+    catch (e) { setErr(e instanceof ApiError ? e.message : "删除持仓失败"); }
   };
 
-  const addClose = async () => {
-    if (!/^\d{6}$/.test(cCode.trim())) { setErr("清仓记录：请输入 6 位代码"); return; }
+  const addClose = async (codeArg?: string) => {
+    const c0 = (codeArg ?? cCode).trim();
+    if (!/^\d{6}$/.test(c0)) { setErr("清仓记录：请输入 6 位代码"); return; }
     const p = parseFloat(cPrice), s = parseFloat(cShares), c = parseFloat(cCost);
     if (!cDate) { setErr("请选清仓日期"); return; }
     if (!(p > 0) || !(s > 0) || !Number.isFinite(c)) { setErr("清仓价 / 股数须大于 0，成本请填数字（可为负）"); return; }
     setClosing(true); setErr(null);
     try {
-      setData(await api.closePosition(cCode.trim(), cDate, p, s, c));
+      setData(await api.closePosition(c0, cDate, p, s, c));
       setCCode(""); setCDate(""); setCPrice(""); setCShares(""); setCCost("");
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加清仓记录失败");
@@ -83,15 +87,20 @@ export function Portfolio() {
   };
 
   const removeClosed = async (i: number) => {
-    try { setData(await api.removeClosed(i)); } catch { /* ignore */ }
+    try { setData(await api.removeClosed(i)); }
+    catch (e) { setErr(e instanceof ApiError ? e.message : "删除清仓记录失败"); }
   };
 
   const holdings = data?.holdings || [];
   const totals = data?.totals;
   const closed = data?.closed || [];
+  const quoteFailed = data?.quote_failed ?? 0;      // 行情未取到的持仓数（已排除出汇总）
+  const hasQuote = holdings.some((h) => h.quote_ok); // 至少一只取到行情才显示汇总卡
 
   const aiContext = totals
-    ? `我的持仓（本地数据）：\n` + holdings.map((h) => `${h.name}(${h.code}) ${h.shares}股 成本${h.cost} 现价${h.price} 浮盈${h.pnl}(${h.pnl_pct}%)`).join("\n") +
+    ? `我的持仓（本地数据）：\n` + holdings.map((h) => h.quote_ok
+        ? `${h.name}(${h.code}) ${h.shares}股 成本${h.cost} 现价${h.price} 浮盈${h.pnl}(${h.pnl_pct}%)`
+        : `${h.name}(${h.code}) ${h.shares}股 成本${h.cost}（行情未取到）`).join("\n") +
       `\n汇总：市值${totals.market_value} 总浮盈${totals.pnl}(${totals.pnl_pct}%)`
     : "我的持仓：暂无记录。";
 
@@ -120,20 +129,37 @@ export function Portfolio() {
         <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库。行情每半小时自动刷新，也可手动刷新。本产品不提供标的、不给建议，只帮你把自己的账理清楚。</span>
       </div>
 
-      {/* 汇总 */}
-      {totals && holdings.length > 0 && (
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            { k: "总市值", v: fmt(totals.market_value), c: "text-foreground" },
-            { k: "总成本", v: fmt(totals.cost), c: "text-foreground" },
-            { k: "浮动盈亏", v: (totals.pnl > 0 ? "+" : "") + fmt(totals.pnl), c: pnlColor(totals.pnl) },
-            { k: "盈亏比例", v: (totals.pnl_pct > 0 ? "+" : "") + totals.pnl_pct + "%", c: pnlColor(totals.pnl) },
-          ].map((m) => (
-            <GlassCard key={m.k} className="p-3">
-              <p className="text-xs text-muted-foreground">{m.k}</p>
-              <p className={cn("mt-1 font-mono text-lg font-bold", m.c)}>{m.v}</p>
-            </GlassCard>
-          ))}
+      {/* 取数失败警告：行情缺失不等于 0 元 / -100%，单独出声并给重试入口 */}
+      {quoteFailed > 0 && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>有 {quoteFailed} 只持仓的行情未取到，已从市值 / 盈亏汇总中排除（不是 0 元，也不代表亏 100%）。</span>
+          <button onClick={() => load(true)} disabled={refreshing}
+            className="ml-auto shrink-0 rounded border border-warning/40 px-2 py-0.5 text-xs text-warning transition-colors hover:bg-warning/10 disabled:opacity-50">
+            重试
+          </button>
+        </div>
+      )}
+
+      {/* 汇总（仅统计取到行情的持仓；行情全缺时不显示 0 值卡） */}
+      {totals && hasQuote && (
+        <div className="mb-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { k: "总市值", v: fmt(totals.market_value), c: "text-foreground" },
+              { k: "总成本", v: fmt(totals.cost), c: "text-foreground" },
+              { k: "浮动盈亏", v: (totals.pnl > 0 ? "+" : "") + fmt(totals.pnl), c: pnlColor(totals.pnl) },
+              { k: "盈亏比例", v: (totals.pnl_pct > 0 ? "+" : "") + totals.pnl_pct + "%", c: pnlColor(totals.pnl) },
+            ].map((m) => (
+              <GlassCard key={m.k} className="p-3">
+                <p className="text-xs text-muted-foreground">{m.k}</p>
+                <p className={cn("mt-1 font-mono text-lg font-bold", m.c)}>{m.v}</p>
+              </GlassCard>
+            ))}
+          </div>
+          {quoteFailed > 0 && (
+            <p className="mt-2 text-[11px] text-muted-foreground/60">汇总已排除 {quoteFailed} 只行情未取到的持仓。</p>
+          )}
         </div>
       )}
 
@@ -143,8 +169,9 @@ export function Portfolio() {
         <div className="flex flex-wrap items-end gap-2">
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-            <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 位代码"
-              className="w-28 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
+            <StockCodeInput value={code} onChange={setCode} onSearch={add} loading={adding}
+              showAction={false} placeholder="6 位代码 / 名称"
+              inputClassName="w-32" dropdownWidth="20rem" />
           </div>
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">数量（股）</label>
@@ -156,7 +183,7 @@ export function Portfolio() {
             <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="如 12.5，可负"
               className="w-28 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           </div>
-          <button onClick={add} disabled={adding}
+          <button onClick={() => add()} disabled={adding}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
             {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 添加
           </button>
@@ -194,13 +221,18 @@ export function Portfolio() {
                     <td className="px-2 py-2.5">
                       <span className="font-medium">{h.name}</span>
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{h.code}</span>
+                      {!h.quote_ok && <span className="ml-1.5 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">行情未取到</span>}
                     </td>
-                    <td className="px-2 py-2.5 font-mono">{fmtPx(h.price)}</td>
+                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{h.quote_ok ? fmtPx(h.price ?? 0) : "—"}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(h.cost)}</td>
-                    <td className="px-2 py-2.5 font-mono">{fmt(h.market_value)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl > 0 ? "+" : ""}{fmt(h.pnl)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl_pct > 0 ? "+" : ""}{h.pnl_pct}%</td>
+                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{h.quote_ok ? fmt(h.market_value ?? 0) : "—"}</td>
+                    <td className={cn("px-2 py-2.5 font-mono", h.quote_ok ? pnlColor(h.pnl ?? 0) : "text-muted-foreground")}>
+                      {h.quote_ok ? `${(h.pnl ?? 0) > 0 ? "+" : ""}${fmt(h.pnl ?? 0)}` : "—"}
+                    </td>
+                    <td className={cn("px-2 py-2.5 font-mono", h.quote_ok ? pnlColor(h.pnl ?? 0) : "text-muted-foreground")}>
+                      {h.quote_ok ? `${(h.pnl_pct ?? 0) > 0 ? "+" : ""}${h.pnl_pct}%` : "—"}
+                    </td>
                     <td className="px-2 py-2.5">
                       <button onClick={() => remove(h.code)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -220,8 +252,9 @@ export function Portfolio() {
         <div className="flex flex-wrap items-end gap-2">
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-            <input value={cCode} onChange={(e) => setCCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 位代码"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
+            <StockCodeInput value={cCode} onChange={setCCode} onSearch={addClose} loading={closing}
+              showAction={false} placeholder="6 位代码 / 名称"
+              inputClassName="w-28" dropdownWidth="18rem" />
           </div>
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">清仓日期</label>
@@ -243,7 +276,7 @@ export function Portfolio() {
             <input value={cCost} onChange={(e) => setCCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="成本价，可负"
               className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           </div>
-          <button onClick={addClose} disabled={closing}
+          <button onClick={() => addClose()} disabled={closing}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
             {closing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 记录
           </button>

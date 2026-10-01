@@ -226,8 +226,10 @@ export interface RadarData {
 }
 
 export interface Holding {
-  code: string; name: string; price: number; shares: number; cost: number;
-  market_value: number; pnl: number; pnl_pct: number;
+  code: string; name: string; price: number | null; shares: number; cost: number;
+  market_value: number | null; pnl: number | null; pnl_pct: number | null;
+  // 行情是否取到：false 表示该股行情缺失（price/市值/盈亏均为 null，且不计入 totals）
+  quote_ok: boolean;
 }
 export interface ClosedPosition {
   code: string; name: string; date: string; price: number; shares: number; cost: number;
@@ -239,6 +241,8 @@ export interface PortfolioData {
   closed: ClosedPosition[];
   realized_pnl: number;
   updated: string; last_refresh: string | null;
+  // 行情未取到的持仓数量（>0 时页面提示，且这些持仓未计入 totals）
+  quote_failed?: number;
 }
 
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）

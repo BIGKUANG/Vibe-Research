@@ -23,7 +23,7 @@
 | `/screener` | 股票筛选 | `docs/ui-design/stock-screener-page-design.md` |
 | `/my-reports` | 我的报告 | `docs/ui-design/my-reports-page.md` |
 | `/debate` | 多空辩论 | 待补 |
-| `/portfolio` | 持仓 | 待补 |
+| `/portfolio` | 持仓 | `docs/ui-design/portfolio-page-ui-design.md` |
 | `/sectors`、`/sectors/:key` | 板块 / 板块详情 | 待补 |
 | `/notes` | 研究记录 | 待补 |
 | `/settings` | 设置 | 待补 |

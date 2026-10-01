@@ -318,6 +318,11 @@ def portfolio_add(h: HoldingIn):
         raise HTTPException(400, "代码必须是 6 位数字")
     if h.shares <= 0:
         raise HTTPException(400, "数量必须大于 0")
+    # 校验代码存在：腾讯明确无此证券（响应 pv_none_match，如 601102）→ 400 明确拒绝，
+    # 避免录入无效代码后在页面显示「行情未取到」；仅 no_match 拒绝，网络异常(unavailable)不拦。
+    status, _ = astock.quote_probe(code)
+    if status == "no_match":
+        raise HTTPException(400, f"未找到 {code} 的行情：该代码不存在或已退市，请确认后重试")
     # 成本价不限正负：融券 / 返息 / 摊薄后为负成本等情形按结果计算，用户想怎么输就怎么输。
     return {"data": pf.add_holding(code, h.shares, h.cost)}
 

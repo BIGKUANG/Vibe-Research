@@ -115,6 +115,26 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
     return _parse_gtimg(_fetch_gtimg(prefixed))
 
 
+def quote_probe(code: str) -> tuple[str, dict | None]:
+    """探测单个代码的行情可用性，供录入校验区分「代码不存在」与「取数失败」。
+
+    返回 (status, quote)：
+      - ("ok", q)            行情有效；
+      - ("no_match", None)   腾讯明确无此证券（响应含 pv_none_match）—— 代码不存在 / 已退市 / 非 A 股，
+                             可据此判定「无效代码」；
+      - ("unavailable", None) 网络 / 源异常 —— **不得据此判定代码无效**，避免把偶发失败当废码。
+    """
+    prefixed = f"{get_prefix(code)}{code}"
+    try:
+        text = _fetch_gtimg([prefixed])
+    except Exception:  # noqa: BLE001 — 网络层失败统一归为 unavailable
+        return ("unavailable", None)
+    if "pv_none_match" in text:
+        return ("no_match", None)
+    q = _parse_gtimg(text).get(code)
+    return ("ok", q) if q else ("unavailable", None)
+
+
 # 腾讯单 URL 拼码上限（实测 ≤800 可用；2000 会被拒）。全市场用 500/块最稳。
 _TENCENT_BATCH = 500
 _TENCENT_WORKERS = 4

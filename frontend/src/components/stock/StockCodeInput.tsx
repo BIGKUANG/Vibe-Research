@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, type KeyboardEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { Search, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStockSuggestions, type Suggestion } from "@/hooks/useStockSuggestions";
@@ -16,6 +17,10 @@ interface Props {
   inputClassName?: string;
   /** 下拉建议宽度，默认 `w-96`；输入框拉满时传 `w-full`。 */
   dropdownClassName?: string;
+  /** 是否渲染组件自带的主按钮，默认 true。持仓 / 清仓等自定义布局传 false，只保留「输入框 + 模糊下拉」。 */
+  showAction?: boolean;
+  /** 下拉宽度（px 数字或 CSS 长度字符串）；默认跟随输入容器宽度。 */
+  dropdownWidth?: number | string;
 }
 
 const DEFAULT_PLACEHOLDER = "A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）";
@@ -29,12 +34,18 @@ export function StockCodeInput({
   actionLabel = "查询",
   inputClassName = "w-80",
   dropdownClassName = "w-96",
+  showAction = true,
+  dropdownWidth,
 }: Props) {
   const [focused, setFocused] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 下拉用 portal 渲染到 body 并 fixed 定位：外层 .glass 的 backdrop-filter 会创建层叠上下文，
+  // 卡片内的 z-50 仍会被后渲染的兄弟卡片盖住；portal + fixed 才能保证浮层永远在最外层。
+  const [anchor, setAnchor] = useState<{ left: number; top: number; bottom: number; width: number } | null>(null);
 
   const { suggestions, loading: suggestLoading } = useStockSuggestions(
     focused ? value : "",
@@ -101,19 +112,39 @@ export function StockCodeInput({
     setHighlightIdx(-1);
   }, [value]);
 
-  // 点击容器外部时关闭
+  // 点击容器 / 下拉外部时关闭
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setFocused(false);
-        setHighlightIdx(-1);
-      }
+      const t = e.target as Node;
+      if (containerRef.current?.contains(t) || dropdownRef.current?.contains(t)) return;
+      setFocused(false);
+      setHighlightIdx(-1);
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   const showDropdown = focused && suggestions.length > 0;
+
+  // 计算下拉锚点（fixed 定位依据）。打开时测一次，滚动 / 缩放时跟随。
+  const updateAnchor = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setAnchor({ left: r.left, top: r.top, bottom: r.bottom, width: r.width });
+  }, []);
+
+  useEffect(() => {
+    if (!showDropdown) { setAnchor(null); return; }
+    updateAnchor();
+    const onMove = () => updateAnchor();
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [showDropdown, updateAnchor]);
 
   return (
     <div ref={containerRef} className="relative">
@@ -134,27 +165,45 @@ export function StockCodeInput({
             inputClassName,
           )}
         />
-        <button
-          onClick={() => {
-            // 有下拉建议时优先使用第一条，避免中文名称直接传给后端
-            if (suggestions.length > 0) {
-              select(suggestions[0]);
-            } else {
-              onSearch(value);
-            }
-          }}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          {actionLabel}
-        </button>
+        {showAction && (
+          <button
+            onClick={() => {
+              // 有下拉建议时优先使用第一条，避免中文名称直接传给后端
+              if (suggestions.length > 0) {
+                select(suggestions[0]);
+              } else {
+                onSearch(value);
+              }
+            }}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            {actionLabel}
+          </button>
+        )}
       </div>
 
-      {/* 下拉建议列表 */}
-      {showDropdown && (
-        <div className={cn("absolute left-0 top-full z-50 mt-1 rounded-lg border border-border bg-card p-1 shadow-xl", dropdownClassName)}>
-          {suggestions.map((s, i) => (
+      {/* 下拉建议列表：portal 到 body + fixed 定位，保证在最外层（不受 .glass 层叠 / 卡片裁剪影响） */}
+      {showDropdown && anchor && createPortal(
+        (() => {
+          const spaceBelow = window.innerHeight - anchor.bottom - 8;
+          const openUp = spaceBelow < 160 && anchor.top > spaceBelow;
+          const maxH = Math.max(120, Math.min(320, openUp ? anchor.top - 8 : spaceBelow));
+          return (
+            <div
+              ref={dropdownRef}
+              style={{
+                position: "fixed",
+                left: anchor.left,
+                top: openUp ? anchor.top - maxH - 4 : anchor.bottom + 4,
+                width: dropdownWidth ?? anchor.width,
+                maxHeight: maxH,
+                zIndex: 1000,
+              }}
+              className={cn("overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-xl", dropdownClassName)}
+            >
+              {suggestions.map((s, i) => (
             <button
               key={s.code}
               onMouseDown={(e) => {
@@ -183,8 +232,11 @@ export function StockCodeInput({
                 </span>
               )}
             </button>
-          ))}
-        </div>
+              ))}
+            </div>
+          );
+        })(),
+        document.body,
       )}
     </div>
   );
