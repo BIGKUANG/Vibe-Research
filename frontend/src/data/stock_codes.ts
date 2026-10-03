@@ -2024,7 +2024,7 @@ export const STOCK_CODES: StockCode[] = [
   { code: "00666", name: "瑞浦兰钧", industry: "", area: "", market: "港股", listDate: "20231218" },
   { code: "00667", name: "中国东方教育", industry: "", area: "", market: "港股", listDate: "20190612" },
   { code: "00668", name: "安克创新", industry: "", area: "", market: "港股", listDate: "20260702" },
-  { code: "00669", name: "创科实业", industry: "", area: "", market: "港股", listDate: "19901217" },
+  { code: "00669", name: "创科实业(一百)", industry: "", area: "", market: "港股", listDate: "19901217" },
   { code: "00670", name: "中国东方航空股份", industry: "", area: "", market: "港股", listDate: "19970205" },
   { code: "00672", name: "众安集团", industry: "", area: "", market: "港股", listDate: "20071113" },
   { code: "00673", name: "中国卫生集团", industry: "", area: "", market: "港股", listDate: "19961014" },
