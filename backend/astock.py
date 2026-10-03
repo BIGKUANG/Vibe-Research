@@ -384,6 +384,8 @@ def stock_news(code: str, limit: int = 20, page: int = 1) -> dict:
     返回分页信封 {items, page, page_size, total, total_pages}，items 每项
     {关键词, 新闻标题, 新闻内容, 发布时间, 文章来源, 新闻链接}（键名与 akshare
     stock_news_em 一致）。page 用于翻更早的新闻。
+    排序：sort=time → **按发布时间倒序（最新在前）**；此前 default 是东财综合/相关性排序，
+    时间会乱序。前端按返回顺序原样渲染，故顺序由这里决定。
     ⚠️ 不走 ak.stock_news_em：它对部分代码（如 600848）会抛
     ArrowInvalid('invalid escape sequence: \\u') 导致新闻恒为空。
     """
@@ -393,7 +395,7 @@ def stock_news(code: str, limit: int = 20, page: int = 1) -> dict:
         "uid": "", "keyword": code, "type": ["cmsArticleWebOld"],
         "client": "web", "clientType": "web", "clientVersion": "curr",
         "param": {"cmsArticleWebOld": {
-            "searchScope": "default", "sort": "default",
+            "searchScope": "default", "sort": "time",
             "pageIndex": pno, "pageSize": psize, "preTag": "", "postTag": "",
         }},
     }, separators=(",", ":"))
