@@ -123,12 +123,13 @@ cd desktop && npm test                      # node --test test/*.test.ts
 | `/watchlist` | 自选股 | `docs/ui-design/watchlist-page-layout.md` |
 | `/screener` | 股票筛选 | `docs/ui-design/stock-screener-page-design.md` |
 | `/my-reports` | 我的报告 | `docs/ui-design/my-reports-page.md` |
-| `/debate` | 多空辩论 | 待补 |
+| `/debate` | 多空辩论 | `docs/ui-design/debate-page-ui-design.md` |
 | `/portfolio` | 持仓 | `docs/ui-design/portfolio-page-ui-design.md` |
-| `/sectors`、`/sectors/:key` | 板块 / 板块详情 | 待补 |
-| `/notes` | 研究记录 | 待补 |
-| `/settings` | 设置 | 待补 |
-| `/login` | 登录 | 待补 |
+| `/sectors` | 板块中心 | `docs/ui-design/sectors-page-ui-design.md` |
+| `/sectors/:key` | 板块详情 | `docs/ui-design/sector-detail-page-ui-design.md` |
+| `/notes` | 研究记录 | `docs/ui-design/notes-page-ui-design.md` |
+| `/settings` | 接入 AI | `docs/ui-design/settings-page-ui-design.md` |
+| `/login` | 登录 | `docs/ui-design/login-page-ui-design.md` |
 
 ## 常见任务速查
 - **先判断改哪代应用**：旧版 = `backend/` + `frontend/`（`run.sh`）；新版 = `desktop/` + 底座模块（orchestrator/calc/datasources…）；两者互不影响
