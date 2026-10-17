@@ -21,9 +21,9 @@ const color = (v: number | undefined) =>
 
 const LIVE_KEY = "vr-watchlist-live";
 const COLS_KEY = "vr-watchlist-columns";
-// 分页：默认每页 25 条（与筛选结果表同一套分页器 Pager）。
+// 分页：默认每页 100 条（与筛选结果表同一套分页器 Pager）。
 const PAGE_SIZES = [25, 50, 100];
-const DEFAULT_PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 100;
 
 // 列注册表（对齐筛选结果表的展示口径；数值列右侧统一 text-right + 等宽字体）。
 type ColKey =
@@ -434,7 +434,7 @@ export function Watchlist() {
           </div>
         )}
 
-        {/* 分页条（参考筛选结果表）：默认每页 25 条，可切 25/50/100 */}
+        {/* 分页条（参考筛选结果表）：默认每页 100 条，可切 25/50/100 */}
         {codes.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 px-4 py-2.5">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
