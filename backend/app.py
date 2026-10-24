@@ -976,3 +976,222 @@ def screener_enrich(codes: str = Query(...), groups: str = Query("roe")):
             raise HTTPException(501, f"ROE 需要 mootdx 依赖：{dep_error}") from dep_error
         raise HTTPException(502, "ROE 数据源暂不可用（mootdx 取数失败）")
     return {"data": out}
+
+
+# ── ETF 筛选（tushare 盘后日频） ──────────────────────────────────────────────
+_ETF_SCREENER_TTL = 1800.0
+_ETF_SCREENER_FIELDS = [
+    "code", "name", "close", "pct_chg", "amount_yi", "turnover_pct",
+    "size_yi", "premium_pct", "index_name", "mgr_name", "fund_type",
+    "is_qdii", "mgt_fee", "total_share", "exchange", "list_date",
+]
+_etf_cache: dict = {"payload": None, "at": 0.0}
+_etf_lock = threading.Lock()
+_etf_refreshing = False
+
+
+def _build_etf_payload() -> dict:
+    payload = astock.etf_screener_build()
+    if not payload.get("fields"):
+        payload["fields"] = _ETF_SCREENER_FIELDS
+    return payload
+
+
+def _store_etf(payload: dict) -> None:
+    with _etf_lock:
+        _etf_cache["payload"] = payload
+        _etf_cache["at"] = _time.time()
+
+
+def _spawn_etf_refresh() -> None:
+    global _etf_refreshing
+    with _etf_lock:
+        if _etf_refreshing:
+            return
+        _etf_refreshing = True
+
+    def _run() -> None:
+        global _etf_refreshing
+        try:
+            _store_etf(_build_etf_payload())
+        except Exception:  # noqa: BLE001 — 后台刷新失败保留旧数据
+            pass
+        finally:
+            with _etf_lock:
+                _etf_refreshing = False
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _etf_error(e: Exception) -> HTTPException:
+    if isinstance(e, astock.TushareNotConfigured):
+        return HTTPException(503, "ETF 筛选需要配置 TUSHARE_TOKEN（项目根目录 .env）")
+    if isinstance(e, astock.DependencyMissing):
+        return HTTPException(503, f"ETF 筛选依赖缺失：{e}")
+    return HTTPException(502, f"ETF 数据获取失败：{e}")
+
+
+@app.get("/api/etf/screener/snapshot")
+def etf_screener_snapshot(refresh: int = Query(0)):
+    """ETF 全量筛选快照（tushare 盘后日频）。refresh=1 强制重取。"""
+    if refresh:
+        try:
+            payload = _build_etf_payload()
+        except Exception as e:  # noqa: BLE001
+            raise _etf_error(e) from e
+        _store_etf(payload)
+        return {"data": payload}
+
+    with _etf_lock:
+        payload = _etf_cache["payload"]
+        at = _etf_cache["at"]
+
+    if payload is not None:
+        if _time.time() - at < _ETF_SCREENER_TTL:
+            return {"data": payload}
+        _spawn_etf_refresh()
+        return {"data": {**payload, "stale": True}}
+
+    try:
+        payload = _build_etf_payload()
+    except Exception as e:  # noqa: BLE001
+        raise _etf_error(e) from e
+    _store_etf(payload)
+    return {"data": payload}
+
+
+# ── ETF 数据页（单只 ETF） ────────────────────────────────────────────────────
+_ETF_RANGES = {"1y", "3y", "all"}
+
+
+def _etf_range(range_: str) -> str:
+    r = (range_ or "1y").strip().lower()
+    if r not in _ETF_RANGES:
+        raise HTTPException(400, "range 仅支持 1y / 3y / all")
+    return r
+
+
+@app.get("/api/etf/profile")
+def etf_profile(code: str = Query(...)):
+    try:
+        return {"data": astock.etf_profile(code)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise _etf_error(e) from e
+
+
+@app.get("/api/etf/size")
+def etf_size(code: str = Query(...), range: str = Query("1y")):
+    rng = _etf_range(range)
+    try:
+        return {"data": astock.etf_size_history(code, rng)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise _etf_error(e) from e
+
+
+@app.get("/api/etf/nav")
+def etf_nav(code: str = Query(...), range: str = Query("1y")):
+    rng = _etf_range(range)
+    try:
+        return {"data": astock.etf_nav_history(code, rng)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise _etf_error(e) from e
+
+
+@app.get("/api/etf/holdings")
+def etf_holdings(code: str = Query(...)):
+    try:
+        return {"data": astock.etf_holdings(code)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise _etf_error(e) from e
+
+
+@app.get("/api/etf/dividends")
+def etf_dividends(code: str = Query(...)):
+    try:
+        return {"data": astock.etf_dividends(code)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise _etf_error(e) from e
+
+
+# ── 指数筛选（tushare index_basic + 日线 + ETF 跟踪聚合） ──────────────────────
+_INDEX_SCREENER_TTL = 1800.0
+_index_cache: dict = {"payload": None, "at": 0.0}
+_index_lock = threading.Lock()
+_index_refreshing = False
+
+
+def _build_index_payload() -> dict:
+    return astock.index_screener_build()
+
+
+def _store_index(payload: dict) -> None:
+    with _index_lock:
+        _index_cache["payload"] = payload
+        _index_cache["at"] = _time.time()
+
+
+def _spawn_index_refresh() -> None:
+    global _index_refreshing
+    with _index_lock:
+        if _index_refreshing:
+            return
+        _index_refreshing = True
+
+    def _run() -> None:
+        global _index_refreshing
+        try:
+            _store_index(_build_index_payload())
+        except Exception:  # noqa: BLE001 — 后台刷新失败保留旧数据
+            pass
+        finally:
+            with _index_lock:
+                _index_refreshing = False
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _index_error(e: Exception) -> HTTPException:
+    if isinstance(e, astock.TushareNotConfigured):
+        return HTTPException(503, "指数筛选需要配置 TUSHARE_TOKEN（项目根目录 .env）")
+    if isinstance(e, astock.DependencyMissing):
+        return HTTPException(503, f"指数筛选依赖缺失：{e}")
+    return HTTPException(502, f"指数数据获取失败：{e}")
+
+
+@app.get("/api/index/screener/snapshot")
+def index_screener_snapshot(refresh: int = Query(0)):
+    """指数全量筛选快照（基础信息 + 最近交易日行情 + ETF 跟踪聚合）。"""
+    if refresh:
+        try:
+            payload = _build_index_payload()
+        except Exception as e:  # noqa: BLE001
+            raise _index_error(e) from e
+        _store_index(payload)
+        return {"data": payload}
+
+    with _index_lock:
+        payload = _index_cache["payload"]
+        at = _index_cache["at"]
+
+    if payload is not None:
+        if _time.time() - at < _INDEX_SCREENER_TTL:
+            return {"data": payload}
+        _spawn_index_refresh()
+        return {"data": {**payload, "stale": True}}
+
+    try:
+        payload = _build_index_payload()
+    except Exception as e:  # noqa: BLE001
+        raise _index_error(e) from e
+    _store_index(payload)
+    return {"data": payload}

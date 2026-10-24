@@ -23,7 +23,14 @@ interface Props {
   dropdownWidth?: number | string;
 }
 
-const DEFAULT_PLACEHOLDER = "A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）";
+const DEFAULT_PLACEHOLDER = "代码或名称：600519 / 510300 / 沪深300ETF / 00700 / AAPL";
+
+const KIND_LABEL: Record<string, string> = { stock: "A股", etf: "ETF", global: "海外" };
+const KIND_CLS: Record<string, string> = {
+  stock: "bg-muted/60 text-muted-foreground",
+  etf: "bg-primary/15 text-primary",
+  global: "bg-muted/60 text-muted-foreground",
+};
 
 export function StockCodeInput({
   value,
@@ -216,10 +223,18 @@ export function StockCodeInput({
                 i === highlightIdx ? "bg-primary/15 text-primary" : "hover:bg-muted/50",
               )}
             >
-              <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">
+              <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
                 {s.code}
               </span>
-              <span className="flex-1 truncate">{s.name}</span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate">{s.name}</span>
+                  <span className={cn("shrink-0 rounded px-1 py-px text-[10px]", KIND_CLS[s.kind] ?? KIND_CLS.stock)}>
+                    {KIND_LABEL[s.kind] ?? "A股"}
+                  </span>
+                </span>
+                {s.sub && <span className="mt-0.5 block truncate text-[11px] text-muted-foreground/70">{s.sub}</span>}
+              </span>
               {s.mcap > 0 ? (
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {s.mcap >= 10000

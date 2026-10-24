@@ -4,7 +4,7 @@ import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText, Swords,
-  SlidersHorizontal,
+  SlidersHorizontal, Boxes, Layers3, BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -25,9 +25,12 @@ const NAV = [
   { to: "/intel", icon: Radar, label: "资讯雷达" },
   { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
   { to: "/stock-data", icon: Search, label: "个股数据" },
+  { to: "/etf-data", icon: Layers3, label: "ETF 数据" },
   { to: "/debate", icon: Swords, label: "多空辩论" },
   { to: "/watchlist", icon: Star, label: "自选股" },
   { to: "/screener", icon: SlidersHorizontal, label: "股票筛选" },
+  { to: "/etf-screener", icon: Boxes, label: "ETF 筛选" },
+  { to: "/index-screener", icon: BarChart3, label: "指数筛选" },
   { to: "/portfolio", icon: Wallet, label: "我的持仓" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
   { to: "/notes", icon: NotebookPen, label: "研究记录" },
@@ -173,7 +176,7 @@ export function Layout() {
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
-        <div className={cn("mx-auto px-6 py-6", pathname === "/screener" ? "max-w-[1600px]" : "max-w-6xl")}>
+        <div className={cn("mx-auto px-6 py-6", pathname === "/screener" || pathname === "/etf-screener" || pathname === "/index-screener" ? "max-w-[1600px]" : "max-w-6xl")}>
           <Outlet />
         </div>
       </main>

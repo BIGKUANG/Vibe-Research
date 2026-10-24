@@ -4,6 +4,7 @@
 > 数据来源参考：`a-stock-data/SKILL.md`（A股全栈数据工具包 v3.6.1，十层 47 端点）+ `docs/full-market-snapshot.md`（腾讯批量 + 巨潮代码表全市场快照方案）。
 > 原则：只呈现客观公开数据与筛选结果，**不出现建仓/加减仓/目标价/止损位等任何投资动作建议**；所有派生比率/倍数经 `calc/` 计算，前端不手搓公式。
 > 状态：本文为布局与实现设计，未改动任何代码。
+> 新增：另设独立「ETF 筛选」页（`/etf-screener`，侧边栏位于「股票筛选」下方），设计见 [etf-screener-page-ui-design.md](etf-screener-page-ui-design.md)。
 
 ---
 

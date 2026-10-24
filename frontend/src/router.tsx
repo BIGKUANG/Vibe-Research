@@ -9,8 +9,11 @@ import { SectorDetail } from "@/pages/SectorDetail";
 import { Debate } from "@/pages/Debate";
 import { Portfolio } from "@/pages/Portfolio";
 import { StockData } from "@/pages/StockData";
+import { EtfData } from "@/pages/EtfData";
 import { Watchlist } from "@/pages/Watchlist";
 import { Screener } from "@/pages/Screener";
+import { EtfScreener } from "@/pages/EtfScreener";
+import { IndexScreener } from "@/pages/IndexScreener";
 import { MyReports } from "@/pages/MyReports";
 import { Notes } from "@/pages/Notes";
 import { Settings } from "@/pages/Settings";
@@ -27,9 +30,12 @@ export const router = createBrowserRouter([
       { path: "/sectors/:key", element: <SectorDetail /> },
       { path: "/portfolio", element: <Portfolio /> },
       { path: "/stock-data", element: <StockData /> },
+      { path: "/etf-data", element: <EtfData /> },
       { path: "/debate", element: <Debate /> },
       { path: "/watchlist", element: <Watchlist /> },
       { path: "/screener", element: <Screener /> },
+      { path: "/etf-screener", element: <EtfScreener /> },
+      { path: "/index-screener", element: <IndexScreener /> },
       { path: "/my-reports", element: <MyReports /> },
       { path: "/notes", element: <Notes /> },
       { path: "/settings", element: <Settings /> },

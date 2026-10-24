@@ -95,6 +95,7 @@ const get = <T>(path: string) => request<T>(path, "GET");
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
+  open?: number; high?: number; low?: number; change_amt?: number;
   pe_ttm: number; pb: number; mcap_yi: number; turnover_pct: number;
   limit_up: number; limit_down: number;
   // 腾讯 88 字段快照里的其余已标定字段（后端 /api/quote 已返回，前端可选展示）
@@ -274,6 +275,57 @@ export interface ScreenerSnapshot {
 }
 export type ScreenerRoe = Record<string, { roe: number | null }>;
 
+// 指数筛选快照（tushare index_basic + 日线 + ETF 跟踪聚合）
+export interface IndexScreenerSnapshot {
+  as_of: string;
+  quote_date: string;
+  sw_quote_date?: string;
+  etf_size_date: string;
+  count: number;
+  no_quote: number;
+  etf_size_missing: number;
+  stale?: boolean;
+  fields: string[];
+  rows: (string | number | boolean | null)[][];
+}
+
+// ETF 数据页（tushare）
+export interface EtfProfile {
+  code: string; ts_code: string; name: string; full_name: string;
+  exchange: string; index_code: string; index_name: string;
+  fund_type: string; etf_type: string; is_qdii: boolean;
+  mgr_name: string; custodian: string; mgt_fee: number | null;
+  setup_date: string; list_date: string; list_status: string;
+  source: string; as_of: string;
+}
+export interface EtfSizePoint { date: string; size_yi: number | null; share_yi: number | null; }
+export interface EtfSizeData { code: string; ts_code: string; items: EtfSizePoint[]; source: string; as_of: string; }
+export interface EtfNavPoint {
+  date: string; unit_nav: number | null; accum_nav: number | null;
+  close: number | null; premium_pct: number | null;
+}
+export interface EtfNavData { code: string; ts_code: string; items: EtfNavPoint[]; source: string; as_of: string; }
+export interface EtfHolding { symbol: string; name: string; mkv_yi: number | null; amount_wan: number | null; ratio_pct: number | null; }
+export interface EtfHoldingsData {
+  code: string; ts_code: string; period: string; ann_date: string;
+  total_count: number; items: EtfHolding[]; source: string;
+}
+export interface EtfDividend { ex_date: string; record_date: string; pay_date: string; div_cash: number | null; div_proc: string; }
+export interface EtfDividendsData { code: string; ts_code: string; items: EtfDividend[]; source: string; }
+
+// ETF 筛选快照（tushare 盘后日频：etf_basic / fund_basic / etf_share_size / fund_daily）
+export interface EtfScreenerSnapshot {
+  as_of: string;
+  trade_date: string;
+  universe_as_of?: string;
+  count: number;
+  size_missing: number;
+  quote_missing: number;
+  stale?: boolean;
+  fields: string[];
+  rows: (string | number | boolean | null)[][];
+}
+
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
@@ -354,6 +406,17 @@ export const api = {
   screenerSnapshot: () => get<ScreenerSnapshot>("/screener/snapshot"),
   screenerEnrich: (codes: string[], groups = "roe") =>
     get<ScreenerRoe>(`/screener/enrich?codes=${encodeURIComponent(codes.join(","))}&groups=${groups}`),
+  etfScreenerSnapshot: (refresh = false) =>
+    get<EtfScreenerSnapshot>(`/etf/screener/snapshot${refresh ? "?refresh=1" : ""}`),
+  etfProfile: (code: string) => get<EtfProfile>(`/etf/profile?code=${encodeURIComponent(code)}`),
+  etfSize: (code: string, range = "1y") =>
+    get<EtfSizeData>(`/etf/size?code=${encodeURIComponent(code)}&range=${range}`),
+  etfNav: (code: string, range = "1y") =>
+    get<EtfNavData>(`/etf/nav?code=${encodeURIComponent(code)}&range=${range}`),
+  etfHoldings: (code: string) => get<EtfHoldingsData>(`/etf/holdings?code=${encodeURIComponent(code)}`),
+  etfDividends: (code: string) => get<EtfDividendsData>(`/etf/dividends?code=${encodeURIComponent(code)}`),
+  indexScreenerSnapshot: (refresh = false) =>
+    get<IndexScreenerSnapshot>(`/index/screener/snapshot${refresh ? "?refresh=1" : ""}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>
     request<MyReport>("/myreports", "POST", { name, content_b64: contentB64 }),

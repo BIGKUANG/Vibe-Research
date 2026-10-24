@@ -17,6 +17,7 @@ import json
 import os
 import random
 import re
+import sys
 import threading
 import time
 import urllib.parse
@@ -1004,6 +1005,649 @@ def screener_roe(code: str) -> float | None:
         roe = None
     _ROE_CACHE[code] = (now, roe)
     return roe
+
+
+# ---------------------------------------------------------------------------
+# ETF 筛选（tushare：etf_basic / fund_basic / etf_share_size / fund_daily）
+# ---------------------------------------------------------------------------
+
+class TushareNotConfigured(RuntimeError):
+    """TUSHARE_TOKEN 未配置：ETF 筛选需要显式提示，不能返回空表冒充成功。"""
+
+
+_ETF_META_TTL = 12 * 3600
+_etf_basic_cache: list[dict] | None = None
+_etf_basic_at = 0.0
+_etf_fundtype_cache: dict[str, str] | None = None
+_etf_fundtype_at = 0.0
+_etf_lock = threading.Lock()
+
+
+def _tushare_pro():
+    """构造 tushare pro 客户端（token / 代理地址只从环境变量读取）。"""
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token:
+        raise TushareNotConfigured("未配置 TUSHARE_TOKEN")
+    try:
+        import tushare as ts  # 惰性依赖
+    except Exception as e:  # noqa: BLE001
+        raise DependencyMissing(f"未安装 tushare（pip install tushare）：{e}") from e
+    pro = ts.pro_api(token)
+    url = os.environ.get("TUSHARE_HTTP_URL", "").strip()
+    if url:
+        pro._DataApi__http_url = url
+    return pro
+
+
+def _df_records(df) -> list[dict]:
+    """DataFrame → 干净的 dict 列表（NaN/inf 统一转 None，不填 0）。"""
+    if df is None or len(df) == 0:
+        return []
+    out: list[dict] = []
+    for rec in df.to_dict("records"):
+        clean: dict = {}
+        for k, v in rec.items():
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                v = None
+            clean[k] = v
+        out.append(clean)
+    return out
+
+
+def _float_or_none(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if math.isfinite(n) else None
+
+
+def _calc_formulas():
+    """惰性导入仓库根目录的确定性计算库。"""
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from calc import formulas  # noqa: PLC0415
+
+    return formulas
+
+
+def etf_basic_list() -> list[dict]:
+    """上市中 ETF 基础信息（tushare etf_basic，进程内缓存 12h）。"""
+    global _etf_basic_cache, _etf_basic_at
+    now = time.time()
+    with _etf_lock:
+        if _etf_basic_cache is not None and now - _etf_basic_at < _ETF_META_TTL:
+            return _etf_basic_cache
+    pro = _tushare_pro()
+    df = pro.etf_basic(
+        list_status="L",
+        fields=(
+            "ts_code,csname,extname,cname,index_code,index_name,setup_date,list_date,"
+            "exchange,mgr_name,custod_name,mgt_fee,etf_type"
+        ),
+    )
+    rows = _df_records(df)
+    if not rows:
+        raise RuntimeError("etf_basic 未返回数据（请检查积分/权限）")
+    with _etf_lock:
+        _etf_basic_cache, _etf_basic_at = rows, now
+    return rows
+
+
+def etf_fund_types() -> dict[str, str]:
+    """ts_code → fund_type（股票型 / 债券型 / 货币型 / 混合型 / 其他），缓存 12h。"""
+    global _etf_fundtype_cache, _etf_fundtype_at
+    now = time.time()
+    with _etf_lock:
+        if _etf_fundtype_cache is not None and now - _etf_fundtype_at < _ETF_META_TTL:
+            return _etf_fundtype_cache
+    pro = _tushare_pro()
+    df = pro.fund_basic(market="E", status="L", fields="ts_code,fund_type")
+    out: dict[str, str] = {}
+    for r in _df_records(df):
+        code, ftype = r.get("ts_code"), r.get("fund_type")
+        if code and ftype:
+            out[str(code)] = str(ftype)
+    with _etf_lock:
+        _etf_fundtype_cache, _etf_fundtype_at = out, now
+    return out
+
+
+def etf_daily_bundle() -> tuple[str, list[dict], list[dict]]:
+    """最近一个同时有 etf_share_size 与 fund_daily 数据的交易日。
+
+    返回 (trade_date YYYYMMDD, 份额/规模记录, 日线记录)。向前回退最多 7 个自然日，
+    覆盖周末与节假日；两个接口都没有数据时抛错，由接口层转成明确提示。
+    """
+    pro = _tushare_pro()
+    for back in range(0, 8):
+        d = (datetime.now() - timedelta(days=back)).strftime("%Y%m%d")
+        share_df = pro.etf_share_size(
+            trade_date=d,
+            fields="trade_date,ts_code,total_share,total_size,nav,close,exchange",
+        )
+        shares = _df_records(share_df)
+        if not shares:
+            continue
+        daily_df = pro.fund_daily(
+            trade_date=d,
+            fields="ts_code,trade_date,close,pct_chg,vol,amount",
+        )
+        dailies = _df_records(daily_df)
+        if dailies:
+            return d, shares, dailies
+    raise RuntimeError("最近 7 天没有可用的 ETF 日频数据（etf_share_size / fund_daily）")
+
+
+def etf_screener_build() -> dict:
+    """组装 ETF 筛选快照（列式）。所有派生比率经 calc 计算。"""
+    basics = etf_basic_list()
+    fund_types = etf_fund_types()
+    trade_date, shares, dailies = etf_daily_bundle()
+
+    size_by = {str(r.get("ts_code")): r for r in shares if r.get("ts_code")}
+    daily_by = {str(r.get("ts_code")): r for r in dailies if r.get("ts_code")}
+    formulas = _calc_formulas()
+
+    fields = [
+        "code", "name", "close", "pct_chg", "amount_yi", "turnover_pct",
+        "size_yi", "premium_pct", "index_name", "mgr_name", "fund_type",
+        "is_qdii", "mgt_fee", "total_share", "exchange", "list_date",
+    ]
+    rows: list[list] = []
+    size_missing = 0
+    quote_missing = 0
+    for b in basics:
+        ts_code = str(b.get("ts_code") or "")
+        if not ts_code:
+            continue
+        s = size_by.get(ts_code) or {}
+        d = daily_by.get(ts_code) or {}
+        total_share = _float_or_none(s.get("total_share"))
+        total_size = _float_or_none(s.get("total_size"))
+        nav = _float_or_none(s.get("nav"))
+        close = _float_or_none(d.get("close"))
+        pct_chg = _float_or_none(d.get("pct_chg"))
+        vol = _float_or_none(d.get("vol"))
+        amount = _float_or_none(d.get("amount"))
+
+        size_yi = total_size / 1e4 if total_size is not None else None
+        amount_yi = amount / 1e5 if amount is not None else None
+        if size_yi is None:
+            size_missing += 1
+        if close is None:
+            quote_missing += 1
+
+        turnover_pct: float | None = None
+        if vol is not None and total_share is not None:
+            # vol 单位「手」(100 份)，total_share 单位「万份」(10000 份)。
+            r = formulas.ratio(vol * 100.0, total_share * 10000.0, "turnover", "份")
+            if r.get("status") == "ok" and r.get("value") is not None:
+                turnover_pct = round(float(r["value"]) * 100.0, 4)
+
+        premium_pct: float | None = None
+        if close is not None and nav is not None:
+            g = formulas.growth_rate(close, nav, "premium")
+            if g.get("status") == "ok" and g.get("value") is not None:
+                premium_pct = round(float(g["value"]) * 100.0, 4)
+
+        rows.append([
+            ts_code.split(".")[0],
+            b.get("extname") or b.get("csname") or "",
+            close,
+            pct_chg,
+            amount_yi,
+            turnover_pct,
+            size_yi,
+            premium_pct,
+            b.get("index_name") or "",
+            b.get("mgr_name") or "",
+            fund_types.get(ts_code) or "其他",
+            (b.get("etf_type") or "") == "QDII",
+            _float_or_none(b.get("mgt_fee")),
+            total_share,
+            b.get("exchange") or "",
+            b.get("list_date") or "",
+        ])
+
+    return {
+        "as_of": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "trade_date": f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}",
+        "universe_as_of": f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}",
+        "count": len(rows),
+        "size_missing": size_missing,
+        "quote_missing": quote_missing,
+        "fields": fields,
+        "rows": rows,
+    }
+
+
+# ---------------------------------------------------------------------------
+# ETF 数据页（单只 ETF 的档案 / 规模 / 净值 / 持仓 / 分红）
+# ---------------------------------------------------------------------------
+
+_ETF_DETAIL_TTL = 1800.0
+_etf_detail_cache: dict[str, tuple[float, object]] = {}
+_etf_detail_lock = threading.Lock()
+
+
+def _etf_cached(key: str, ttl: float, fn):
+    now = time.time()
+    with _etf_detail_lock:
+        hit = _etf_detail_cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    value = fn()
+    with _etf_detail_lock:
+        _etf_detail_cache[key] = (now, value)
+    return value
+
+
+def normalize_etf_code(code: str) -> str:
+    """6 位代码 / 510300.SH / sh510300 → 510300.SH。以 etf_basic 为准，找不到再按号段兜底。"""
+    raw = (code or "").strip().upper()
+    if not raw:
+        raise ValueError("代码不能为空")
+    if raw.endswith((".SH", ".SZ")):
+        return raw
+    if raw.startswith(("SH", "SZ")) and len(raw) == 8:
+        return f"{raw[2:]}.{raw[:2]}"
+    if not (raw.isdigit() and len(raw) == 6):
+        raise ValueError("ETF 代码必须是 6 位数字（可带 .SH/.SZ 后缀）")
+    for row in etf_basic_list():
+        ts = str(row.get("ts_code") or "")
+        if ts.startswith(raw + "."):
+            return ts
+    return f"{raw}.SH" if raw.startswith(("5", "6")) else f"{raw}.SZ"
+
+
+def _etf_basic_row(code: str) -> dict | None:
+    ts = normalize_etf_code(code)
+    for row in etf_basic_list():
+        if str(row.get("ts_code") or "") == ts:
+            return row
+    return None
+
+
+def etf_profile(code: str) -> dict:
+    """单只 ETF 静态档案（tushare etf_basic + fund_basic）。"""
+    row = _etf_basic_row(code)
+    if row is None:
+        raise ValueError(f"未收录该 ETF：{code}")
+    ts = str(row.get("ts_code") or "")
+    fund_type = etf_fund_types().get(ts) or "其他"
+    return {
+        "code": ts.split(".")[0],
+        "ts_code": ts,
+        "name": row.get("extname") or row.get("csname") or "",
+        "full_name": row.get("cname") or "",
+        "exchange": row.get("exchange") or "",
+        "index_code": row.get("index_code") or "",
+        "index_name": row.get("index_name") or "",
+        "fund_type": fund_type,
+        "etf_type": row.get("etf_type") or "境内",
+        "is_qdii": (row.get("etf_type") or "") == "QDII",
+        "mgr_name": row.get("mgr_name") or "",
+        "custodian": row.get("custod_name") or "",
+        "mgt_fee": _float_or_none(row.get("mgt_fee")),
+        "setup_date": row.get("setup_date") or "",
+        "list_date": row.get("list_date") or "",
+        "list_status": row.get("list_status") or "L",
+        "source": "tushare",
+        "as_of": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+
+
+def _range_start(rng: str) -> str:
+    if rng == "1y":
+        return (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+    if rng == "3y":
+        return (datetime.now() - timedelta(days=365 * 3)).strftime("%Y%m%d")
+    return "20050101"
+
+
+def etf_size_history(code: str, rng: str = "1y") -> dict:
+    """ETF 每日规模/份额（tushare etf_share_size），T-1 口径；缺失日期不补点。"""
+    ts = normalize_etf_code(code)
+
+    def _fetch():
+        pro = _tushare_pro()
+        df = pro.etf_share_size(
+            ts_code=ts,
+            start_date=_range_start(rng),
+            end_date=datetime.now().strftime("%Y%m%d"),
+            fields="trade_date,ts_code,total_share,total_size",
+        )
+        items = []
+        for r in sorted(_df_records(df), key=lambda x: str(x.get("trade_date") or "")):
+            share = _float_or_none(r.get("total_share"))
+            size = _float_or_none(r.get("total_size"))
+            items.append({
+                "date": str(r.get("trade_date") or ""),
+                "size_yi": round(size / 1e4, 4) if size is not None else None,
+                "share_yi": round(share / 1e4, 4) if share is not None else None,
+            })
+        return {"code": ts.split(".")[0], "ts_code": ts, "items": items,
+                "source": "tushare", "as_of": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+    return _etf_cached(f"size:{ts}:{rng}", _ETF_DETAIL_TTL, _fetch)
+
+
+def etf_nav_history(code: str, rng: str = "1y") -> dict:
+    """单位净值 + 收盘价 + 折溢价（同日期，经 calc.growth_rate）。"""
+    ts = normalize_etf_code(code)
+
+    def _fetch():
+        pro = _tushare_pro()
+        start, end = _range_start(rng), datetime.now().strftime("%Y%m%d")
+        nav_df = pro.fund_nav(
+            ts_code=ts, start_date=start, end_date=end,
+            fields="nav_date,unit_nav,accum_nav,adj_nav",
+        )
+        size_df = pro.etf_share_size(
+            ts_code=ts, start_date=start, end_date=end,
+            fields="trade_date,close",
+        )
+        close_by = {
+            str(r.get("trade_date")): _float_or_none(r.get("close"))
+            for r in _df_records(size_df)
+            if r.get("trade_date")
+        }
+        formulas = _calc_formulas()
+        items = []
+        for r in sorted(_df_records(nav_df), key=lambda x: str(x.get("nav_date") or "")):
+            date = str(r.get("nav_date") or "")
+            nav = _float_or_none(r.get("unit_nav"))
+            close = close_by.get(date)
+            premium = None
+            if close is not None and nav is not None:
+                g = formulas.growth_rate(close, nav, "premium")
+                if g.get("status") == "ok" and g.get("value") is not None:
+                    premium = round(float(g["value"]) * 100.0, 4)
+            items.append({
+                "date": date,
+                "unit_nav": nav,
+                "accum_nav": _float_or_none(r.get("accum_nav")),
+                "close": close,
+                "premium_pct": premium,
+            })
+        return {"code": ts.split(".")[0], "ts_code": ts, "items": items,
+                "source": "tushare", "as_of": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+    return _etf_cached(f"nav:{ts}:{rng}", _ETF_DETAIL_TTL, _fetch)
+
+
+def etf_holdings(code: str) -> dict:
+    """最新季报前十大持仓（tushare fund_portfolio）。"""
+    ts = normalize_etf_code(code)
+
+    def _fetch():
+        pro = _tushare_pro()
+        rows = _df_records(pro.fund_portfolio(ts_code=ts))
+        if not rows:
+            return {"code": ts.split(".")[0], "ts_code": ts, "period": "",
+                    "ann_date": "", "total_count": 0, "items": [], "source": "tushare"}
+        latest = max(str(r.get("end_date") or "") for r in rows)
+        period_rows = [r for r in rows if str(r.get("end_date") or "") == latest]
+        names = {u["code"]: u["name"] for u in a_share_universe()}
+        period_rows.sort(key=lambda r: _float_or_none(r.get("stk_mkv_ratio")) or 0, reverse=True)
+        items = []
+        for r in period_rows[:10]:
+            symbol = str(r.get("symbol") or "")
+            mkv = _float_or_none(r.get("mkv"))
+            amount = _float_or_none(r.get("amount"))
+            ratio = _float_or_none(r.get("stk_mkv_ratio"))
+            items.append({
+                "symbol": symbol.split(".")[0],
+                "name": names.get(symbol.split(".")[0], ""),
+                "mkv_yi": round(mkv / 1e8, 4) if mkv is not None else None,
+                "amount_wan": round(amount / 1e4, 2) if amount is not None else None,
+                "ratio_pct": ratio,
+            })
+        return {
+            "code": ts.split(".")[0],
+            "ts_code": ts,
+            "period": latest,
+            "ann_date": str(period_rows[0].get("ann_date") or "") if period_rows else "",
+            "total_count": len(period_rows),
+            "items": items,
+            "source": "tushare",
+        }
+
+    return _etf_cached(f"holdings:{ts}", 6 * 3600, _fetch)
+
+
+def etf_dividends(code: str) -> dict:
+    """最近 10 条分红记录（tushare fund_div）。"""
+    ts = normalize_etf_code(code)
+
+    def _fetch():
+        pro = _tushare_pro()
+        rows = _df_records(pro.fund_div(ts_code=ts))
+        rows.sort(key=lambda r: str(r.get("ex_date") or r.get("ann_date") or ""), reverse=True)
+        items = []
+        for r in rows[:10]:
+            items.append({
+                "ex_date": r.get("ex_date") or "",
+                "record_date": r.get("record_date") or "",
+                "pay_date": r.get("pay_date") or "",
+                "div_cash": _float_or_none(r.get("div_cash")),
+                "div_proc": r.get("div_proc") or "",
+            })
+        return {"code": ts.split(".")[0], "ts_code": ts, "items": items,
+                "source": "tushare"}
+
+    return _etf_cached(f"div:{ts}", 6 * 3600, _fetch)
+
+
+# ---------------------------------------------------------------------------
+# 指数筛选（index_basic + index_daily / sw_daily + ETF 跟踪聚合）
+# ---------------------------------------------------------------------------
+
+_INDEX_META_TTL = 12 * 3600
+_INDEX_DAILY_TTL = 1800
+_INDEX_ETF_TTL = 1800
+_INDEX_CSI_CATEGORIES = [
+    "规模指数", "主题指数", "行业指数", "债券指数", "策略指数", "风格指数",
+    "多资产指数", "基金指数", "期货指数", "综合指数", "其他指数", "外汇指数",
+]
+_INDEX_OTHER_MARKETS = ["SSE", "SZSE", "SW", "CNI", "BSE"]
+_INDEX_FIELDS = (
+    "ts_code,name,fullname,market,publisher,index_type,category,"
+    "base_date,base_point,list_date,weight_rule,desc,exp_date"
+)
+
+
+def _index_api_call(pro, **kwargs):
+    """单次 index_basic 调用 + 限频保护（120 次/分）。"""
+    time.sleep(0.55)
+    return pro.index_basic(fields=_INDEX_FIELDS, **kwargs)
+
+
+def index_basic_all() -> list[dict]:
+    """全量国内指数基础信息（缓存 12h）。
+
+    index_basic 单次最多 8000 行，CSI 超过上限，按类别分批 + 其它市场整批抓取后去重。
+    """
+    def _fetch():
+        pro = _tushare_pro()
+        rows: list[dict] = []
+        for cat in _INDEX_CSI_CATEGORIES:
+            try:
+                df = _index_api_call(pro, market="CSI", category=cat)
+                rows.extend(_df_records(df))
+            except Exception as e:  # noqa: BLE001 — 单类别失败不拖垮整表
+                if "超速" in str(e):
+                    time.sleep(62)
+                    try:
+                        rows.extend(_df_records(_index_api_call(pro, market="CSI", category=cat)))
+                    except Exception:
+                        continue
+                continue
+        for m in _INDEX_OTHER_MARKETS:
+            try:
+                rows.extend(_df_records(_index_api_call(pro, market=m)))
+            except Exception as e:  # noqa: BLE001
+                if "超速" in str(e):
+                    time.sleep(62)
+                    try:
+                        rows.extend(_df_records(_index_api_call(pro, market=m)))
+                    except Exception:
+                        continue
+                continue
+        seen: dict[str, dict] = {}
+        for r in rows:
+            code = str(r.get("ts_code") or "")
+            if code and code not in seen:
+                seen[code] = r
+        out = sorted(seen.values(), key=lambda r: str(r.get("ts_code") or ""))
+        if not out:
+            raise RuntimeError("index_basic 未返回数据（请检查积分/权限）")
+        return out
+
+    return _etf_cached("index:basic", _INDEX_META_TTL, _fetch)
+
+
+def index_daily_latest() -> tuple[str, list[dict]]:
+    """最近一个交易日的全部指数行情（index_daily）。"""
+    def _fetch():
+        pro = _tushare_pro()
+        for back in range(0, 8):
+            d = (datetime.now() - timedelta(days=back)).strftime("%Y%m%d")
+            try:
+                df = pro.index_daily(
+                    trade_date=d,
+                    fields="ts_code,trade_date,close,pct_chg",
+                )
+            except Exception:
+                continue
+            rows = _df_records(df)
+            if rows:
+                return d, rows
+        return "", []
+
+    return _etf_cached("index:daily", _INDEX_DAILY_TTL, _fetch)
+
+
+def sw_daily_latest() -> tuple[str, list[dict]]:
+    """申万指数最近交易日行情（sw_daily）；失败返回空，不影响其它指数。"""
+    def _fetch():
+        pro = _tushare_pro()
+        for back in range(0, 8):
+            d = (datetime.now() - timedelta(days=back)).strftime("%Y%m%d")
+            try:
+                df = pro.sw_daily(trade_date=d)
+            except Exception:
+                continue
+            rows = _df_records(df)
+            if rows:
+                return d, rows
+        return "", []
+
+    return _etf_cached("index:sw", _INDEX_DAILY_TTL, _fetch)
+
+
+def etf_index_stats() -> dict:
+    """按 ETF 跟踪的指数聚合：ETF 数量 + 合计规模（T-1）。"""
+    def _fetch():
+        trade_date, shares, _ = etf_daily_bundle()
+        size_by = {str(r.get("ts_code")): _float_or_none(r.get("total_size")) for r in shares}
+        stats: dict[str, dict] = {}
+        missing = 0
+        for etf in etf_basic_list():
+            ic = str(etf.get("index_code") or "")
+            if not ic:
+                continue
+            ts = str(etf.get("ts_code") or "")
+            size = size_by.get(ts)
+            item = stats.setdefault(ic, {"count": 0, "size_yi": 0.0, "missing": 0})
+            item["count"] += 1
+            if size is None:
+                item["missing"] += 1
+                missing += 1
+            else:
+                item["size_yi"] += size / 1e4
+
+        return {
+            "date": f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}",
+            "stats": stats,
+            "missing": missing,
+        }
+
+    return _etf_cached("index:etfstats", _INDEX_ETF_TTL, _fetch)
+
+
+def index_screener_build() -> dict:
+    """指数筛选快照（列式）。基础表与行情/ETF 聚合并行获取，缩短冷启动。"""
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_basic = pool.submit(index_basic_all)
+        f_daily = pool.submit(index_daily_latest)
+        f_sw = pool.submit(sw_daily_latest)
+        f_etf = pool.submit(etf_index_stats)
+        basics = f_basic.result()
+        quote_date, daily_rows = f_daily.result()
+        sw_date, sw_rows = f_sw.result()
+        etf_stats = f_etf.result()
+
+    daily_by = {str(r.get("ts_code")): r for r in daily_rows if r.get("ts_code")}
+    sw_by = {str(r.get("ts_code")): r for r in sw_rows if r.get("ts_code")}
+    etf_by = etf_stats["stats"]
+    today = datetime.now().strftime("%Y%m%d")
+
+    fields = [
+        "code", "name", "fullname", "market", "publisher", "category", "index_type",
+        "base_date", "base_point", "list_date", "exp_date", "close", "pct_chg",
+        "etf_count", "etf_size_yi", "status",
+    ]
+    rows: list[list] = []
+    no_quote = 0
+    for b in basics:
+        ts = str(b.get("ts_code") or "")
+        d = daily_by.get(ts) or {}
+        sw = sw_by.get(ts) or {}
+        close = _float_or_none(d.get("close"))
+        pct = _float_or_none(d.get("pct_chg"))
+        if close is None and sw:
+            close = _float_or_none(sw.get("close"))
+            pct = _float_or_none(sw.get("pct_change"))
+        if close is None:
+            no_quote += 1
+        etf = etf_by.get(ts) or {}
+        exp = str(b.get("exp_date") or "")
+        status = "终止" if exp and exp <= today else "存续"
+        rows.append([
+            ts,
+            b.get("name") or "",
+            b.get("fullname") or "",
+            b.get("market") or "",
+            b.get("publisher") or "",
+            b.get("category") or "",
+            b.get("index_type") or "",
+            b.get("base_date") or "",
+            _float_or_none(b.get("base_point")),
+            b.get("list_date") or "",
+            exp,
+            close,
+            pct,
+            int(etf.get("count") or 0),
+            round(float(etf.get("size_yi") or 0.0), 4) if etf else None,
+            status,
+        ])
+
+    return {
+        "as_of": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "quote_date": f"{quote_date[:4]}-{quote_date[4:6]}-{quote_date[6:]}" if quote_date else "",
+        "sw_quote_date": f"{sw_date[:4]}-{sw_date[4:6]}-{sw_date[6:]}" if sw_date else "",
+        "etf_size_date": etf_stats["date"],
+        "count": len(rows),
+        "no_quote": no_quote,
+        "etf_size_missing": etf_stats["missing"],
+        "fields": fields,
+        "rows": rows,
+    }
 
 
 # ---------------------------------------------------------------------------

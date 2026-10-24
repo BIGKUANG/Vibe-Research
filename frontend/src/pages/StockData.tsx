@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   FileText, Newspaper, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare, Download,
@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { StockCodeInput } from "@/components/stock/StockCodeInput";
 import { PriceDistribution } from "@/components/stock/PriceDistribution";
 import { KLineChart } from "@/components/stock/KLineChart";
+import { findEtf, normalizeFundCode } from "@/lib/etf";
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -45,6 +46,8 @@ const round2 = (v: number | null | undefined, suffix = "") =>
   v == null ? "—" : `${Math.round(v * 100) / 100}${suffix}`;
 
 // 百分比：后端偶发给 null/缺字段时显示 —，不出现 "NaN%" / 误导性 "0.00%"
+const looksLikeEtf = (c: string) => /^5\d{5}$/.test(c) || /^1[5-8]\d{4}$/.test(c);
+
 const pct = (v: number | null | undefined) =>
   v === null || v === undefined || !Number.isFinite(Number(v)) ? "—" : `${Number(v).toFixed(2)}%`;
 
@@ -250,6 +253,7 @@ function FailCard({ title, icon: Icon, source, err }: {
 
 export function StockData() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -319,6 +323,12 @@ export function StockData() {
   const run = async (overrideCode?: string) => {
     const c = (overrideCode || code).trim().toUpperCase();
     if (!c) { setErr("请输入代码"); return; }
+    // ETF 使用独立页面与独立视图，不在个股页混排。
+    const fundCode = normalizeFundCode(c);
+    if (findEtf(fundCode) || looksLikeEtf(fundCode)) {
+      navigate(`/etf-data?code=${fundCode}`);
+      return;
+    }
     const rid = ++runIdRef.current;
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
@@ -418,6 +428,11 @@ export function StockData() {
   useEffect(() => {
     if (!paramCode || lastParamRef.current === paramCode) return;
     lastParamRef.current = paramCode;
+    const fundCode = normalizeFundCode(paramCode);
+    if (findEtf(fundCode) || looksLikeEtf(fundCode)) {
+      navigate(`/etf-data?code=${fundCode}`, { replace: true });
+      return;
+    }
     setCode(paramCode);
     void run(paramCode);
     // run 为组件内闭包，按参数触发即可，无需列入依赖

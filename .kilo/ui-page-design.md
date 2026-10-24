@@ -18,9 +18,12 @@
 |------|------|----------|
 | `/daily-review` | 每日复盘 | `docs/ui-design/daily-review-page-ui-design.md` |
 | `/stock-data` | 个股数据 | `docs/ui-design/stock-data-page-ui-design.md`（模板） |
+| `/etf-data` | ETF 数据 | `docs/ui-design/etf-data-page-ui-design.md` |
 | `/intel` | 情报 | `docs/ui-design/intel-page-layout.md` |
 | `/watchlist` | 自选股 | `docs/ui-design/watchlist-page-layout.md` |
 | `/screener` | 股票筛选 | `docs/ui-design/stock-screener-page-design.md` |
+| `/etf-screener` | ETF 筛选 | `docs/ui-design/etf-screener-page-ui-design.md` |
+| `/index-screener` | 指数筛选 | `docs/ui-design/index-screener-page-ui-design.md` |
 | `/my-reports` | 我的报告 | `docs/ui-design/my-reports-page.md` |
 | `/debate` | 多空辩论 | `docs/ui-design/debate-page-ui-design.md` |
 | `/portfolio` | 持仓 | `docs/ui-design/portfolio-page-ui-design.md` |
