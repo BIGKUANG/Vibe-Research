@@ -11,12 +11,12 @@ interface Props {
   onSort: (key: ColumnKey) => void;
   onAddWatch: (code: string) => void;
   added: Set<string>;
-  roeLoading: boolean;
+  finLoading: boolean;
   emptyHint: string;
 }
 
-// 单列单元格（涨跌列按 A 股红涨绿跌着色；ROE 未加载时显示骨架条）。
-function Cell({ row, col, roeLoading }: { row: ScreenerRow; col: ColumnDef; roeLoading: boolean }) {
+// 单列单元格（涨跌/同比列按自身数值红涨绿跌；财报未加载时显示骨架条）。
+function Cell({ row, col, finLoading }: { row: ScreenerRow; col: ColumnDef; finLoading: boolean }) {
   if (col.key === "name") {
     return (
       <td className="whitespace-nowrap px-3 py-2">
@@ -26,16 +26,17 @@ function Cell({ row, col, roeLoading }: { row: ScreenerRow; col: ColumnDef; roeL
       </td>
     );
   }
-  if (col.key === "roe" && row.roe == null) {
+  if (col.financial && row[col.key as "revenue_yoy"] == null) {
     return (
       <td className="px-3 py-2 text-right">
-        {roeLoading ? <span className="inline-block h-3 w-10 animate-pulse rounded bg-muted/60 align-middle" /> : <span className="text-muted-foreground/50">—</span>}
+        {finLoading ? <span className="inline-block h-3 w-10 animate-pulse rounded bg-muted/60 align-middle" /> : <span className="text-muted-foreground/50">—</span>}
       </td>
     );
   }
   const text = cellText(row, col.key);
+  const own = row[col.key as "change_pct"];
   const color = col.colored
-    ? row.change_pct > 0 ? "text-danger" : row.change_pct < 0 ? "text-success" : "text-muted-foreground"
+    ? own > 0 ? "text-danger" : own < 0 ? "text-success" : "text-muted-foreground"
     : col.align === "right" ? "text-muted-foreground" : "";
   return (
     <td className={cn("whitespace-nowrap px-3 py-2", col.align === "right" && "text-right font-mono tabular-nums", color)}>
@@ -44,10 +45,10 @@ function Cell({ row, col, roeLoading }: { row: ScreenerRow; col: ColumnDef; roeL
   );
 }
 
-export function ScreenerTable({ rows, columns, sortKey, sortDir, onSort, onAddWatch, added, roeLoading, emptyHint }: Props) {
+export function ScreenerTable({ rows, columns, sortKey, sortDir, onSort, onAddWatch, added, finLoading, emptyHint }: Props) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[920px] border-collapse text-sm">
+      <table className="w-full min-w-[1280px] border-collapse text-sm">
         <thead>
           <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
             {columns.map((c) => (
@@ -78,7 +79,7 @@ export function ScreenerTable({ rows, columns, sortKey, sortDir, onSort, onAddWa
             rows.map((r) => (
               <tr key={r.code} className="border-b border-border/30 transition-colors hover:bg-muted/40">
                 {columns.map((c) => (
-                  <Cell key={c.key} row={r} col={c} roeLoading={roeLoading} />
+                  <Cell key={c.key} row={r} col={c} finLoading={finLoading} />
                 ))}
                 <td className="whitespace-nowrap px-3 py-2 text-right">
                   <div className="inline-flex items-center gap-1 opacity-60 transition-opacity hover:opacity-100">

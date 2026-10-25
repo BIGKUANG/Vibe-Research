@@ -21,6 +21,11 @@ interface Props {
   boardCounts: Record<string, number>;
   dirty: boolean;
   loading: boolean;
+  finPeriod: string | null;
+  finAsOf: string | null;
+  finPartial: boolean;
+  finLoading: boolean;
+  finError: string | null;
 }
 
 // 市值快捷档位（亿元）。末档无上限。
@@ -32,12 +37,51 @@ const MCAP_PRESETS: { label: string; min: string; max: string }[] = [
   { label: "≥1000", min: "1000", max: "" },
 ];
 
-function Card({ title, children, className }: { title: string; children: ReactNode; className?: string }) {
+type FinKey = "revenueYoy" | "profitYoy" | "roe" | "grossMargin";
+
+const FIN_METRICS: { key: FinKey; label: string; presets: { label: string; min: string; max: string }[] }[] = [
+  { key: "revenueYoy", label: "营收同比%", presets: [
+    { label: "≥20", min: "20", max: "" }, { label: "≥0", min: "0", max: "" }, { label: "↓20", min: "", max: "-20" },
+  ] },
+  { key: "profitYoy", label: "净利同比%", presets: [
+    { label: "≥20", min: "20", max: "" }, { label: "≥0", min: "0", max: "" }, { label: "↓20", min: "", max: "-20" },
+  ] },
+  { key: "roe", label: "ROE(%)", presets: [
+    { label: "≥15", min: "15", max: "" }, { label: "≥8", min: "8", max: "" }, { label: "≥0", min: "0", max: "" },
+  ] },
+  { key: "grossMargin", label: "毛利率(%)", presets: [
+    { label: "≥40", min: "40", max: "" }, { label: "≥20", min: "20", max: "" }, { label: "≥0", min: "0", max: "" },
+  ] },
+];
+
+/** 报告期 YYYYMMDD → 2026Q3。 */
+function periodLabel(period: string | null): string {
+  if (!period || period.length !== 8) return "报告期未获取";
+  const y = period.slice(0, 4);
+  const q = period.slice(4, 6) === "03" ? 1 : period.slice(4, 6) === "06" ? 2 : period.slice(4, 6) === "09" ? 3 : 4;
+  return `${y}Q${q}`;
+}
+
+function finTime(asOf: string | null): string {
+  if (!asOf) return "";
+  // 后端格式 +0800：补成 +08:00，避免部分浏览器解析失败。
+  const d = new Date(asOf.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+}
+
+function Card({ title, children, className, extra }: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+  extra?: ReactNode;
+}) {
   return (
     <div className={cn("rounded-lg border border-border/50 bg-muted/10 p-3", className)}>
       <div className="mb-2.5 flex items-center gap-1.5">
         <span className="h-3.5 w-[3px] rounded-full bg-primary/70" />
         <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+        {extra && <div className="ml-auto flex items-center gap-1.5">{extra}</div>}
       </div>
       {children}
     </div>
@@ -72,6 +116,11 @@ export function ScreenerFilters({
   boardCounts,
   dirty,
   loading,
+  finPeriod,
+  finAsOf,
+  finPartial,
+  finLoading,
+  finError,
 }: Props) {
   if (collapsed) {
     return (
@@ -99,6 +148,8 @@ export function ScreenerFilters({
     const boards = draft.boards.includes(b) ? draft.boards.filter((x) => x !== b) : [...draft.boards, b];
     onChange({ boards });
   };
+
+  const finDisabled = finLoading || !finPeriod;
 
   return (
     <div className="glass glass-glow mb-4 p-4">
@@ -158,10 +209,6 @@ export function ScreenerFilters({
               <span className="text-xs text-muted-foreground">PB</span>
               <RangeInput value={draft.pb} onChange={(pb) => onChange({ pb })} />
             </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-muted-foreground">ROE(%)</span>
-              <RangeInput value={draft.roe} onChange={(roe) => onChange({ roe })} />
-            </div>
             <Toggle label="仅正 PE" checked={draft.onlyPositivePe} onChange={(onlyPositivePe) => onChange({ onlyPositivePe })} />
           </div>
         </Card>
@@ -190,6 +237,72 @@ export function ScreenerFilters({
                 </button>
               );
             })}
+          </div>
+        </Card>
+
+        <Card
+          title="财报"
+          className="md:col-span-2 xl:col-span-4"
+          extra={(
+            <>
+              <span className={cn(
+                "rounded bg-muted/50 px-1.5 py-0.5 font-mono text-[11px]",
+                finPeriod ? "text-muted-foreground" : "text-warning",
+              )}>
+                {periodLabel(finPeriod)}
+              </span>
+              {finPeriod && <span className="text-[11px] text-muted-foreground/60">累计口径</span>}
+              {finPartial && <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[11px] text-warning">部分披露</span>}
+              {finError && <span className="text-[11px] text-warning" title={finError}>财报数据未获取</span>}
+            </>
+          )}
+        >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {FIN_METRICS.map(({ key, label, presets }) => (
+              <div key={key}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">{label}</span>
+                  <RangeInput
+                    value={draft[key]}
+                    onChange={(v) => onChange({ [key]: v } as Partial<ScreenerConditions>)}
+                    disabled={finDisabled}
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {presets.map((p) => {
+                    const active = draft[key].min === p.min && draft[key].max === p.max;
+                    return (
+                      <button
+                        key={p.label}
+                        type="button"
+                        disabled={finDisabled}
+                        onClick={() => {
+                          const next = draft[key].min === p.min && draft[key].max === p.max
+                            ? { min: "", max: "" }
+                            : { min: p.min, max: p.max };
+                          onChange({ [key]: next } as Partial<ScreenerConditions>);
+                        }}
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                          active
+                            ? "border-primary/50 bg-primary/10 text-primary"
+                            : "border-border/60 text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                          finDisabled && "cursor-not-allowed opacity-50 hover:border-border/60 hover:text-muted-foreground",
+                        )}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between border-t border-border/40 pt-2">
+            <Toggle label="仅显示已披露财报" checked={draft.onlyDisclosed} onChange={(onlyDisclosed) => onChange({ onlyDisclosed })} />
+            <span className="text-[11px] text-muted-foreground/60">
+              {finLoading ? "财报数据加载中…" : finAsOf ? `数据 ${finTime(finAsOf)} 更新` : ""}
+            </span>
           </div>
         </Card>
 

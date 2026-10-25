@@ -4,6 +4,7 @@
 > 数据参考：`a-stock-data/SKILL.md`（v3.6.1）+ `docs/full-market-snapshot.md`（腾讯批量全市场原型）。
 > 硬约束：**从点击「开始筛选」到结果可见 ≤ 3s**；零鉴权；不触发封 IP；事实数字必须来自本次取数。
 > 结论速览：**MVP 只需 3 个数据源**（腾讯批量 + mootdx 财务 + 本地静态表），全部属「不封 IP / 低风险」档；**东财系一律不接入**。
+> 更新（2026-10-25）：新增「财报」筛选（营收同比 / 净利同比 / ROE / 毛利率），数据改为**东财业绩报表 `stock_yjbb_em` 一次全市场分页拉取**（约 24 页 / 7s，6h 缓存），与行情快照并行、不进首屏关键路径；**ROE 随之由 mootdx 异步增强迁入财报快照，页面不再调用 `/api/screener/enrich`**。详见设计文档 §4.2、§5.2。
 
 ---
 
@@ -18,10 +19,10 @@
 | 证券类型（剔除 ETF/指数/可转债） | `security_type` | `tencent_quote` | §1.2 | 同上（**字段 61**，需补解析） | 腾讯 | 不封 IP | 是 |
 | 停牌/僵尸报价 | `is_stale` | `tencent_quote` | §1.2 | 同上（字段 37/3/4 组合判断，需补） | 腾讯 | 不封 IP | 是 |
 | ST / 退市排除 | `name` 含 `ST` / `退` | `tencent_quote` 名称 + 本地 `name` | §1.2 | 同上 | 腾讯/本地 | — | 是 |
-| ROE | `roe` | mootdx `client.finance(symbol)` | §6.1 | TCP 7709（`Quotes.factory(market='std')`） | 通达信 | 不封 IP | **否（异步）** |
+| ROE / 营收同比 / 净利同比 / 毛利率 | `roe,revenue_yoy,profit_yoy,gross_margin` | `stock_yjbb_em(date=报告期)`（东财业绩报表，全市场一次拉取） | 东财 data-center | `data.eastmoney.com/bbsj/.../yjbb.html` 分页 | 东财 | 中（单次分页 ~24 页，需限流） | **否（与行情并行，6h 缓存）** |
 | 全市场代码表（刷新/补 orgId，可选） | `code,orgId` | 巨潮 `szse_stock.json` | §7.1 | `http://www.cninfo.com.cn/new/data/szse_stock.json` | 巨潮 | 低 | 否（启动/每日缓存） |
 
-**结论**：关键路径上只有 **腾讯批量** 一个网络源 + 本地文件；ROE 走异步；巨潮只是后台刷新用，不进首屏。
+**结论**：关键路径上只有 **腾讯批量** 一个网络源 + 本地文件；**财报四项走与行情并行的东财业绩报表全市场快照（6h 缓存，不逐只请求）**，不占首屏 3s 预算；巨潮只是后台刷新用，不进首屏。
 
 ---
 

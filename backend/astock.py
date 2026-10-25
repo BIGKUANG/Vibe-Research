@@ -1007,6 +1007,104 @@ def screener_roe(code: str) -> float | None:
     return roe
 
 
+# 全市场财报快照：东财「业绩报表」一份数据集覆盖全市场一个报告期，
+# 不逐只请求（逐只 500 只需数十秒到数分钟，且易触发源站限流）。
+_SCREENER_FIN_FIELDS = ["code", "revenue_yoy", "profit_yoy", "roe", "gross_margin"]
+_SCREENER_FIN_MIN_COVERAGE = 0.30  # 最新报告期至少 30% 的 A 股已披露才采用
+
+
+def _quarter_ends(limit: int = 4, today: datetime | None = None) -> list[str]:
+    """最近若干个已过去的季度末（YYYYMMDD，倒序）。"""
+    dt = today or datetime.now()
+    q_end_month = ((dt.month - 1) // 3 + 1) * 3
+    out: list[str] = []
+    for i in range(6):
+        mm = q_end_month - i * 3
+        yy = dt.year
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        day = {3: 31, 6: 30, 9: 30, 12: 31}[mm]
+        end = datetime(yy, mm, day)
+        if end.date() <= dt.date():
+            out.append(end.strftime("%Y%m%d"))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _num_or_none(v) -> float | None:
+    """接口里的 '-' / 空 / NaN 一律视为缺值（None），不填 0 冒充。"""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) or math.isinf(f) else f
+
+
+def screener_financials() -> dict:
+    """全市场财报快照（东财业绩报表，报告期累计口径）。
+
+    一次分页拉全市场，按 A 股代码表过滤后返回四指标：
+    营收同比 / 净利同比 / ROE / 销售毛利率。报告期按「覆盖率 ≥30% 的最新一期」选择；
+    都不足阈值时取覆盖率最高的一期并标 partial。取不到就抛错，不返回空表冒充成功。
+    """
+    ak = _akshare()
+    universe = {u["code"] for u in a_share_universe()}
+    if not universe:
+        raise RuntimeError("本地股票表缺失（frontend/src/data/stock_codes.csv）")
+
+    best: tuple[float, str, dict, bool] | None = None  # (coverage, period, payload, partial)
+    for period in _quarter_ends():
+        try:
+            df = ak.stock_yjbb_em(date=period)
+        except Exception:  # noqa: BLE001 — 单期失败换上一期，全失败由调用方报错
+            continue
+        if df is None or df.empty:
+            continue
+
+        rows: list[list] = []
+        seen: set[str] = set()
+        cols = set(df.columns)
+        need = {"股票代码", "营业总收入-同比增长", "净利润-同比增长", "净资产收益率", "销售毛利率"}
+        if not need <= cols:
+            continue
+        records = df[list(need)].to_dict("records")
+        for rec in records:
+            code = str(rec.get("股票代码") or "").strip().zfill(6)
+            if code not in universe or code in seen:
+                continue
+            seen.add(code)
+            rows.append([
+                code,
+                _num_or_none(rec.get("营业总收入-同比增长")),
+                _num_or_none(rec.get("净利润-同比增长")),
+                _num_or_none(rec.get("净资产收益率")),
+                _num_or_none(rec.get("销售毛利率")),
+            ])
+        if not rows:
+            continue
+        coverage = len(rows) / len(universe)
+        payload = {
+            "period": period,
+            "as_of": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "covered": len(rows),
+            "partial": coverage < _SCREENER_FIN_MIN_COVERAGE,
+            "fields": _SCREENER_FIN_FIELDS,
+            "rows": rows,
+        }
+        if coverage >= _SCREENER_FIN_MIN_COVERAGE:
+            return payload
+        if best is None or coverage > best[0]:
+            best = (coverage, period, payload, True)
+
+    if best is not None:
+        return {**best[2], "partial": best[3]}
+    raise RuntimeError("东财业绩报表暂不可用（报告期数据均未取到）")
+
+
 # ---------------------------------------------------------------------------
 # ETF 筛选（tushare：etf_basic / fund_basic / etf_share_size / fund_daily）
 # ---------------------------------------------------------------------------

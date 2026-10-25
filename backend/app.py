@@ -936,9 +936,62 @@ def screener_snapshot():
     return {"data": payload}
 
 
+_SCREENER_FIN_TTL = 6 * 3600.0
+_screener_fin_cache: dict = {"payload": None, "at": 0.0}
+_screener_fin_lock = threading.Lock()
+_screener_fin_refreshing = False
+
+
+def _spawn_screener_fin_refresh() -> None:
+    """后台刷新财报快照（同一时刻只允许一个刷新在跑）。"""
+    global _screener_fin_refreshing
+    with _screener_fin_lock:
+        if _screener_fin_refreshing:
+            return
+        _screener_fin_refreshing = True
+
+    def _run() -> None:
+        global _screener_fin_refreshing
+        try:
+            payload = astock.screener_financials()
+            with _screener_fin_lock:
+                _screener_fin_cache["payload"] = payload
+                _screener_fin_cache["at"] = _time.time()
+        except Exception:  # noqa: BLE001 — 后台刷新失败保留旧数据
+            pass
+        finally:
+            with _screener_fin_lock:
+                _screener_fin_refreshing = False
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+@app.get("/api/screener/financials")
+def screener_financials():
+    """全市场财报快照（东财业绩报表，报告期累计口径）。命中缓存 <50ms；冷启动约 8s。"""
+    with _screener_fin_lock:
+        payload = _screener_fin_cache["payload"]
+        at = _screener_fin_cache["at"]
+    if payload is not None:
+        if _time.time() - at < _SCREENER_FIN_TTL:
+            return {"data": payload}
+        _spawn_screener_fin_refresh()
+        return {"data": {**payload, "stale": True}}
+    try:
+        payload = astock.screener_financials()
+    except astock.DependencyMissing as e:
+        raise HTTPException(501, f"财报数据需要 akshare 依赖：{e}") from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"财报快照构建失败：{e}") from e
+    with _screener_fin_lock:
+        _screener_fin_cache["payload"] = payload
+        _screener_fin_cache["at"] = _time.time()
+    return {"data": payload}
+
+
 @app.get("/api/screener/enrich")
 def screener_enrich(codes: str = Query(...), groups: str = Query("roe")):
-    """按需增强（本期仅 ROE）：对当前结果集（≤50 只）批量取 ROE，4 路并发、12h 缓存。"""
+    """按需增强（兼容接口）：对当前结果集（≤50 只）批量取 ROE，4 路并发、12h 缓存。"""
     lst = [c.strip() for c in codes.split(",") if c.strip()]
     lst = [c for c in lst if c.isdigit() and len(c) == 6]
     if not lst:

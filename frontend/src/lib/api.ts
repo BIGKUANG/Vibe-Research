@@ -275,6 +275,17 @@ export interface ScreenerSnapshot {
 }
 export type ScreenerRoe = Record<string, { roe: number | null }>;
 
+// 全市场财报快照（东财业绩报表，报告期累计口径）：fields + rows 列式
+export interface ScreenerFinancials {
+  period: string;          // YYYYMMDD
+  as_of: string;
+  covered: number;
+  partial: boolean;
+  stale?: boolean;
+  fields: string[];
+  rows: (string | number | null)[][];
+}
+
 // 指数筛选快照（tushare index_basic + 日线 + ETF 跟踪聚合）
 export interface IndexScreenerSnapshot {
   as_of: string;
@@ -404,6 +415,7 @@ export const api = {
   watchlistSet: (codes: string[]) => request<{ ok: boolean }>("/watchlist", "POST", codes),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
   screenerSnapshot: () => get<ScreenerSnapshot>("/screener/snapshot"),
+  screenerFinancials: () => get<ScreenerFinancials>("/screener/financials"),
   screenerEnrich: (codes: string[], groups = "roe") =>
     get<ScreenerRoe>(`/screener/enrich?codes=${encodeURIComponent(codes.join(","))}&groups=${groups}`),
   etfScreenerSnapshot: (refresh = false) =>

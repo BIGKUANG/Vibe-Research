@@ -3,13 +3,16 @@ import { Columns3, Download, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ColumnDef, ColumnKey } from "@/lib/screener";
 
-export type RoeStatus = "idle" | "loading" | "done" | "unavailable" | "error";
+export type FinStatus = "idle" | "loading" | "done" | "stale" | "unavailable" | "error";
 
 interface Props {
   count: number;
   asOf: string | null;
   stale: boolean;
-  roeStatus: RoeStatus;
+  finStatus: FinStatus;
+  finPeriod: string | null;
+  finPartial: boolean;
+  finError: string | null;
   refreshing: boolean;
   columns: ColumnDef[];
   hidden: Set<ColumnKey>;
@@ -25,16 +28,30 @@ function fmtAsOf(asOf: string | null): string {
   return d.toLocaleString("zh-CN", { hour12: false });
 }
 
-const ROE_TEXT: Record<RoeStatus, string> = {
-  idle: "",
-  loading: "ROE 加载中…",
-  done: "ROE 已加载",
-  unavailable: "ROE 需安装 mootdx",
-  error: "ROE 暂不可用",
-};
+/** 报告期 YYYYMMDD → 2026Q3。 */
+function periodLabel(period: string | null): string {
+  if (!period || period.length !== 8) return "报告期未获取";
+  const y = period.slice(0, 4);
+  const m = period.slice(4, 6);
+  const q = m === "03" ? 1 : m === "06" ? 2 : m === "09" ? 3 : 4;
+  return `${y}Q${q}`;
+}
+
+function finText(status: FinStatus, period: string | null, partial: boolean): string {
+  const p = periodLabel(period);
+  switch (status) {
+    case "loading": return "财报加载中…";
+    case "done": return `财报 ${p} 已加载${partial ? "（部分披露）" : ""}`;
+    case "stale": return `财报 ${p}（缓存，可能过期）`;
+    case "unavailable": return "财报需安装 akshare";
+    case "error": return "财报未获取";
+    default: return "";
+  }
+}
 
 export function ScreenerToolbar({
-  count, asOf, stale, roeStatus, refreshing, columns, hidden, onToggleColumn, onExport, onRefresh,
+  count, asOf, stale, finStatus, finPeriod, finPartial, finError,
+  refreshing, columns, hidden, onToggleColumn, onExport, onRefresh,
 }: Props) {
   const [colsOpen, setColsOpen] = useState(false);
   const colsRef = useRef<HTMLDivElement>(null);
@@ -55,10 +72,16 @@ export function ScreenerToolbar({
         <span className={cn("font-mono text-muted-foreground", stale && "text-warning")}>
           快照 {fmtAsOf(asOf)}{stale && "（可能过期，后台刷新中）"}
         </span>
-        {roeStatus !== "idle" && (
-          <span className={cn("inline-flex items-center gap-1", roeStatus === "loading" ? "text-primary/80" : "text-muted-foreground")}>
-            {roeStatus === "loading" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />}
-            {ROE_TEXT[roeStatus]}
+        {finStatus !== "idle" && (
+          <span
+            title={finError ?? ""}
+            className={cn(
+              "inline-flex items-center gap-1",
+              finStatus === "loading" ? "text-primary/80" : finStatus === "error" || finStatus === "unavailable" ? "text-warning" : "text-muted-foreground",
+            )}
+          >
+            {finStatus === "loading" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />}
+            {finText(finStatus, finPeriod, finPartial)}
           </span>
         )}
       </div>

@@ -6,19 +6,19 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import { Pager } from "@/components/ui/Pager";
 import { ScreenerFilters } from "@/components/screener/ScreenerFilters";
-import { ScreenerToolbar, type RoeStatus } from "@/components/screener/ScreenerToolbar";
+import { ScreenerToolbar, type FinStatus } from "@/components/screener/ScreenerToolbar";
 import { ScreenerTable } from "@/components/screener/ScreenerTable";
-import { api, ApiError, type ScreenerSnapshot } from "@/lib/api";
+import { api, ApiError, type ScreenerFinancials, type ScreenerSnapshot } from "@/lib/api";
 import { STOCK_CODES } from "@/data/stock_codes";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
 import { storageGet, storageSet } from "@/lib/storage";
 import {
   activeConditionCount, BOARD_OPTIONS, conditionChips, decodeSnapshot, defaultConditions,
-  filterRows, SCREENER_COLUMNS, sortRows, toCsv,
+  filterRows, mergeFinancials, SCREENER_COLUMNS, sortRows, toCsv, withoutFinancials,
   type ColumnKey, type ScreenerConditions, type ScreenerRow, type SortDir,
 } from "@/lib/screener";
 
-const COND_KEY = "vr-screener-conditions-v2"; // v2：默认市场板块改为「主板」
+const COND_KEY = "vr-screener-conditions-v3"; // v3：新增财报四项（营收同比/净利同比/ROE/毛利率）
 const COLLAPSE_KEY = "vr-screener-collapsed";
 const COLS_KEY = "vr-screener-columns";
 const A_SHARE_MARKETS = new Set<string>(BOARD_OPTIONS);
@@ -32,7 +32,10 @@ function loadConditions(): ScreenerConditions {
     const p = JSON.parse(raw) as Partial<ScreenerConditions>;
     const merged: ScreenerConditions = { ...base, ...p };
     // 区间字段逐项兜底，避免旧版本缺字段导致运行时 undefined。
-    for (const k of ["pe", "pb", "roe", "mcap", "change", "turnover", "volRatio", "amount", "amplitude"] as const) {
+    for (const k of [
+      "pe", "pb", "revenueYoy", "profitYoy", "roe", "grossMargin",
+      "mcap", "change", "turnover", "volRatio", "amount", "amplitude",
+    ] as const) {
       merged[k] = { ...base[k], ...(p[k] ?? {}) };
     }
     merged.boards = Array.isArray(p.boards) ? p.boards : base.boards;
@@ -83,10 +86,9 @@ export function Screener() {
   const [sortKey, setSortKey] = useState<ColumnKey>("mcap_yi");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  const [roeMap, setRoeMap] = useState<Record<string, number | null>>({});
-  const [roeStatus, setRoeStatus] = useState<RoeStatus>("idle");
-  const requestedRoe = useRef<Set<string>>(new Set());
-  const roeUnavailable = useRef(false);
+  const [financials, setFinancials] = useState<ScreenerFinancials | null>(null);
+  const [finStatus, setFinStatus] = useState<FinStatus>("idle");
+  const [finError, setFinError] = useState<string | null>(null);
   const [watchCodes, setWatchCodes] = useState<Set<string>>(new Set());
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -106,7 +108,22 @@ export function Screener() {
     }
   }, []);
 
-  useEffect(() => { void fetchSnapshot(); }, [fetchSnapshot]);
+  // 财报快照与行情并行；失败时保留旧数据（stale），无旧数据则禁用财报条件。
+  const fetchFinancials = useCallback(async () => {
+    setFinStatus("loading");
+    setFinError(null);
+    try {
+      const fin = await api.screenerFinancials();
+      setFinancials(fin);
+      setFinStatus(fin.stale ? "stale" : "done");
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "财报快照加载失败";
+      setFinError(msg);
+      setFinStatus(e instanceof ApiError && e.status === 501 ? "unavailable" : "error");
+    }
+  }, []);
+
+  useEffect(() => { void fetchSnapshot(); void fetchFinancials(); }, [fetchSnapshot, fetchFinancials]);
   useEffect(() => {
     loadWatch().then((cs) => setWatchCodes(new Set(cs))).catch(() => { /* 忽略：本地兜底 */ });
   }, []);
@@ -123,13 +140,14 @@ export function Screener() {
     return counts;
   }, []);
 
-  // ROE 增量合并进行数据（仅当前页候选），使 ROE 过滤与展示同步生效。
-  const mergedRows = useMemo(
-    () => rows.map((r) => (r.code in roeMap ? { ...r, roe: roeMap[r.code] } : r)),
-    [rows, roeMap],
+  // 行情 + 财报按 code 合并；财报未就绪时忽略财报条件，避免把「未加载」当成「全不满足」。
+  const mergedRows = useMemo(() => mergeFinancials(rows, financials), [rows, financials]);
+  const effectiveConditions = useMemo(
+    () => (financials ? applied : withoutFinancials(applied)),
+    [applied, financials],
   );
 
-  const filtered = useMemo(() => filterRows(mergedRows, applied), [mergedRows, applied]);
+  const filtered = useMemo(() => filterRows(mergedRows, effectiveConditions), [mergedRows, effectiveConditions]);
   const sorted = useMemo(() => sortRows(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -137,34 +155,6 @@ export function Screener() {
     () => sorted.slice((safePage - 1) * pageSize, safePage * pageSize),
     [sorted, safePage, pageSize],
   );
-  const pageCodes = useMemo(() => pageRows.map((r) => r.code), [pageRows]);
-
-  // 按需拉取当前页 ROE（≤50 只；后端 4 路并发 + 12h 缓存）。依赖缺失时不再重试。
-  useEffect(() => {
-    if (roeUnavailable.current || pageCodes.length === 0) return;
-    const missing = pageCodes.filter((c) => !(c in roeMap) && !requestedRoe.current.has(c));
-    if (missing.length === 0) return;
-    missing.forEach((c) => requestedRoe.current.add(c));
-    setRoeStatus("loading");
-    api.screenerEnrich(missing)
-      .then((data) => {
-        setRoeMap((prev) => {
-          const next = { ...prev };
-          for (const [code, v] of Object.entries(data)) next[code] = v.roe ?? null;
-          return next;
-        });
-        setRoeStatus("done");
-      })
-      .catch((e) => {
-        missing.forEach((c) => requestedRoe.current.delete(c));
-        if (e instanceof ApiError && e.status === 501) {
-          roeUnavailable.current = true;
-          setRoeStatus("unavailable");
-        } else {
-          setRoeStatus("error");
-        }
-      });
-  }, [pageCodes, roeMap]);
 
   const visibleColumns = useMemo(() => SCREENER_COLUMNS.filter((c) => !hidden.has(c.key)), [hidden]);
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(applied), [draft, applied]);
@@ -186,9 +176,6 @@ export function Screener() {
     setApplied(base);
     storageSet(COND_KEY, JSON.stringify(base));
     setPage(1);
-    setRoeMap({});
-    requestedRoe.current.clear();
-    setRoeStatus("idle");
   }, []);
 
   const onToggleCollapse = useCallback(() => {
@@ -255,6 +242,11 @@ export function Screener() {
         boardCounts={boardCounts}
         dirty={dirty}
         loading={false}
+        finPeriod={financials?.period ?? null}
+        finAsOf={financials?.as_of ?? null}
+        finPartial={Boolean(financials?.partial)}
+        finLoading={finStatus === "loading"}
+        finError={finError}
       />
 
       <div ref={resultsRef} className="scroll-mt-4">
@@ -263,13 +255,16 @@ export function Screener() {
             count={sorted.length}
             asOf={snapshot?.as_of ?? null}
             stale={Boolean(snapshot?.stale)}
-            roeStatus={roeStatus}
+            finStatus={finStatus}
+            finPeriod={financials?.period ?? null}
+            finPartial={Boolean(financials?.partial)}
+            finError={finError}
             refreshing={refreshing}
             columns={SCREENER_COLUMNS}
             hidden={hidden}
             onToggleColumn={onToggleColumn}
             onExport={onExport}
-            onRefresh={() => void fetchSnapshot(true)}
+            onRefresh={() => { void fetchSnapshot(true); void fetchFinancials(); }}
           />
 
           {error ? (
@@ -296,7 +291,7 @@ export function Screener() {
                 onSort={onSort}
                 onAddWatch={onAddWatch}
                 added={watchCodes}
-                roeLoading={roeStatus === "loading"}
+                finLoading={finStatus === "loading"}
                 emptyHint="没有符合条件的股票，试试放宽筛选条件。"
               />
               <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">

@@ -2,7 +2,7 @@
 // 有意与 React 解耦：便于单测，组件只做渲染与状态编排。
 // 合规：本模块只处理客观行情/估值/行业字段，不含评分、评级或买卖建议。
 
-import type { ScreenerSnapshot } from "./api";
+import type { ScreenerFinancials, ScreenerSnapshot } from "./api";
 
 /** 全市场快照中的一行（已解码为对象，便于过滤/排序/展示）。 */
 export interface ScreenerRow {
@@ -26,8 +26,11 @@ export interface ScreenerRow {
   area: string;
   board: string;
   list_date: string;
-  /** ROE 为按需增强（L2），未加载时为 undefined。 */
-  roe?: number | null;
+  /** 财报四项（L1.5，报告期累计口径）；未加载/未披露为 null。 */
+  revenue_yoy: number | null;
+  profit_yoy: number | null;
+  roe: number | null;
+  gross_margin: number | null;
 }
 
 type RawValue = string | number | boolean | null;
@@ -66,8 +69,43 @@ export function decodeSnapshot(snap: ScreenerSnapshot): ScreenerRow[] {
     area: str(get(r, "area")),
     board: str(get(r, "board")),
     list_date: str(get(r, "list_date")),
-    roe: undefined,
+    revenue_yoy: null,
+    profit_yoy: null,
+    roe: null,
+    gross_margin: null,
   }));
+}
+
+const finNum = (v: unknown): number | null => {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** 财报列式快照 → 按 code 并入行情行；未披露保持 null（不填 0）。 */
+export function mergeFinancials(rows: ScreenerRow[], fin: ScreenerFinancials | null): ScreenerRow[] {
+  if (!fin) return rows;
+  const idx = new Map<string, number>();
+  fin.fields.forEach((f, i) => idx.set(f, i));
+  const map = new Map<string, { revenue_yoy: number | null; profit_yoy: number | null; roe: number | null; gross_margin: number | null }>();
+  const at = (r: (string | number | null)[], k: string) => {
+    const i = idx.get(k);
+    return i == null ? null : finNum(r[i]);
+  };
+  for (const r of fin.rows) {
+    const code = String(r[idx.get("code") ?? 0] ?? "").padStart(6, "0");
+    if (!code) continue;
+    map.set(code, {
+      revenue_yoy: at(r, "revenue_yoy"),
+      profit_yoy: at(r, "profit_yoy"),
+      roe: at(r, "roe"),
+      gross_margin: at(r, "gross_margin"),
+    });
+  }
+  return rows.map((row) => {
+    const f = map.get(row.code);
+    return f ? { ...row, ...f } : row;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -87,9 +125,14 @@ export interface ScreenerConditions {
   excludeSt: boolean;
   excludeStale: boolean;
   onlyPositivePe: boolean;
+  /** 财报：仅显示已披露（默认开；财报数据未就绪时前端忽略此开关）。 */
+  onlyDisclosed: boolean;
   pe: RangeCond;
   pb: RangeCond;
+  revenueYoy: RangeCond;
+  profitYoy: RangeCond;
   roe: RangeCond;
+  grossMargin: RangeCond;
   mcap: RangeCond;
   change: RangeCond;
   turnover: RangeCond;
@@ -109,9 +152,13 @@ export function defaultConditions(): ScreenerConditions {
     excludeSt: true,
     excludeStale: true,
     onlyPositivePe: false,
+    onlyDisclosed: true,
     pe: emptyRange(),
     pb: emptyRange(),
+    revenueYoy: emptyRange(),
+    profitYoy: emptyRange(),
     roe: emptyRange(),
+    grossMargin: emptyRange(),
     mcap: emptyRange(),
     change: emptyRange(),
     turnover: emptyRange(),
@@ -122,10 +169,12 @@ export function defaultConditions(): ScreenerConditions {
 }
 
 type RangeKey =
-  | "pe" | "pb" | "roe" | "mcap" | "change" | "turnover" | "volRatio" | "amount" | "amplitude";
+  | "pe" | "pb" | "revenueYoy" | "profitYoy" | "roe" | "grossMargin"
+  | "mcap" | "change" | "turnover" | "volRatio" | "amount" | "amplitude";
 
 const RANGE_KEYS: RangeKey[] = [
-  "pe", "pb", "roe", "mcap", "change", "turnover", "volRatio", "amount", "amplitude",
+  "pe", "pb", "revenueYoy", "profitYoy", "roe", "grossMargin",
+  "mcap", "change", "turnover", "volRatio", "amount", "amplitude",
 ];
 
 /** 已设置的条件项数（用于头部「已选 N 项」；默认开关不计入）。 */
@@ -141,7 +190,9 @@ export function activeConditionCount(c: ScreenerConditions): number {
 }
 
 const RANGE_LABEL: Record<RangeKey, string> = {
-  pe: "PE(TTM)", pb: "PB", roe: "ROE", mcap: "总市值(亿)", change: "涨跌幅(%)",
+  pe: "PE(TTM)", pb: "PB", revenueYoy: "营收同比(%)", profitYoy: "净利同比(%)",
+  roe: "ROE(%)", grossMargin: "毛利率(%)",
+  mcap: "总市值(亿)", change: "涨跌幅(%)",
   turnover: "换手率(%)", volRatio: "量比", amount: "成交额(万)", amplitude: "振幅(%)",
 };
 
@@ -185,10 +236,16 @@ function inBounds(v: number | undefined | null, b: NumBounds): boolean {
 
 const ST_RE = /ST|退/i;
 
-/** 按条件过滤全量行。纯函数，无副作用。 */
+/** 该行是否已披露财报（四指标任一有值）。 */
+export const hasFinancials = (r: ScreenerRow): boolean =>
+  r.revenue_yoy != null || r.profit_yoy != null || r.roe != null || r.gross_margin != null;
+
+/** 按条件过滤全量行。纯函数，无副作用。财报缺值不命中财报区间（缺值 ≠ 满足）。 */
 export function filterRows(rows: ScreenerRow[], c: ScreenerConditions): ScreenerRow[] {
   const bounds = {
-    pe: parseBounds(c.pe), pb: parseBounds(c.pb), roe: parseBounds(c.roe),
+    pe: parseBounds(c.pe), pb: parseBounds(c.pb),
+    revenueYoy: parseBounds(c.revenueYoy), profitYoy: parseBounds(c.profitYoy),
+    roe: parseBounds(c.roe), grossMargin: parseBounds(c.grossMargin),
     mcap: parseBounds(c.mcap), change: parseBounds(c.change), turnover: parseBounds(c.turnover),
     volRatio: parseBounds(c.volRatio), amount: parseBounds(c.amount), amplitude: parseBounds(c.amplitude),
   };
@@ -200,10 +257,14 @@ export function filterRows(rows: ScreenerRow[], c: ScreenerConditions): Screener
     if (c.excludeSt && ST_RE.test(r.name)) return false;
     if (c.excludeStale && r.is_stale) return false;
     if (c.onlyPositivePe && !(r.pe_ttm > 0)) return false;
+    if (c.onlyDisclosed && !hasFinancials(r)) return false;
     return (
       inBounds(r.pe_ttm, bounds.pe) &&
       inBounds(r.pb, bounds.pb) &&
+      inBounds(r.revenue_yoy, bounds.revenueYoy) &&
+      inBounds(r.profit_yoy, bounds.profitYoy) &&
       inBounds(r.roe, bounds.roe) &&
+      inBounds(r.gross_margin, bounds.grossMargin) &&
       inBounds(r.mcap_yi, bounds.mcap) &&
       inBounds(r.change_pct, bounds.change) &&
       inBounds(r.turnover_pct, bounds.turnover) &&
@@ -214,9 +275,22 @@ export function filterRows(rows: ScreenerRow[], c: ScreenerConditions): Screener
   });
 }
 
+/** 财报数据未就绪时忽略财报相关条件，避免把「未加载」当成「全不满足」。 */
+export function withoutFinancials(c: ScreenerConditions): ScreenerConditions {
+  return {
+    ...c,
+    onlyDisclosed: false,
+    revenueYoy: emptyRange(),
+    profitYoy: emptyRange(),
+    roe: emptyRange(),
+    grossMargin: emptyRange(),
+  };
+}
+
 export type ColumnKey =
   | "name" | "price" | "change_pct" | "turnover_pct" | "vol_ratio" | "amplitude_pct"
-  | "pe_ttm" | "pb" | "roe" | "mcap_yi" | "float_mcap_yi" | "amount_wan"
+  | "pe_ttm" | "pb" | "revenue_yoy" | "profit_yoy" | "roe" | "gross_margin"
+  | "mcap_yi" | "float_mcap_yi" | "amount_wan"
   | "industry" | "area" | "board" | "list_date";
 
 export type SortDir = "asc" | "desc";
@@ -251,8 +325,10 @@ export interface ColumnDef {
   align: "left" | "right";
   /** 默认隐藏（用户可在「列设置」里打开）。 */
   hidden?: boolean;
-  /** 涨跌配色列。 */
+  /** 涨跌配色列（按自身数值正负着色，A 股红涨绿跌）。 */
   colored?: boolean;
+  /** 财报列：未披露显示「—」。 */
+  financial?: boolean;
 }
 
 export const SCREENER_COLUMNS: ColumnDef[] = [
@@ -264,7 +340,10 @@ export const SCREENER_COLUMNS: ColumnDef[] = [
   { key: "amplitude_pct", label: "振幅%", align: "right" },
   { key: "pe_ttm", label: "PE(TTM)", align: "right" },
   { key: "pb", label: "PB", align: "right" },
-  { key: "roe", label: "ROE%", align: "right" },
+  { key: "revenue_yoy", label: "营收同比%", align: "right", colored: true, financial: true },
+  { key: "profit_yoy", label: "净利同比%", align: "right", colored: true, financial: true },
+  { key: "roe", label: "ROE%", align: "right", financial: true },
+  { key: "gross_margin", label: "毛利率%", align: "right", financial: true },
   { key: "mcap_yi", label: "总市值", align: "right" },
   { key: "float_mcap_yi", label: "流通市值", align: "right", hidden: true },
   { key: "amount_wan", label: "成交额", align: "right" },
@@ -292,6 +371,14 @@ export const fmtAmount = (wan: number | null | undefined): string => {
   return wan >= 10000 ? `${(wan / 10000).toFixed(2)}亿` : `${wan.toFixed(0)}万`;
 };
 
+/** 财报数值：保留 1 位小数，缺值「—」。 */
+export const fmtFin = (v: number | null | undefined): string =>
+  v == null || !Number.isFinite(v) ? "—" : v.toFixed(1);
+
+/** 同比：保留 1 位小数并带正号；缺值「—」。 */
+export const fmtFinPct = (v: number | null | undefined): string =>
+  v == null || !Number.isFinite(v) ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+
 /** 单元格式展示值（表格与 CSV 共用，保证所见即所出）。 */
 export function cellText(r: ScreenerRow, key: ColumnKey): string {
   switch (key) {
@@ -303,7 +390,10 @@ export function cellText(r: ScreenerRow, key: ColumnKey): string {
     case "amplitude_pct": return fmt2(r.amplitude_pct);
     case "pe_ttm": return r.pe_ttm > 0 ? fmt2(r.pe_ttm) : "—";
     case "pb": return r.pb > 0 ? fmt2(r.pb) : "—";
-    case "roe": return r.roe == null ? "—" : fmt2(r.roe);
+    case "revenue_yoy": return fmtFinPct(r.revenue_yoy);
+    case "profit_yoy": return fmtFinPct(r.profit_yoy);
+    case "roe": return fmtFin(r.roe);
+    case "gross_margin": return fmtFin(r.gross_margin);
     case "mcap_yi": return fmtMcap(r.mcap_yi);
     case "float_mcap_yi": return fmtMcap(r.float_mcap_yi);
     case "amount_wan": return fmtAmount(r.amount_wan);
